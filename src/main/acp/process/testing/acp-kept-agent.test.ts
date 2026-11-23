@@ -1,4 +1,4 @@
-import { describe, expect, it } from 'vitest'
+import { describe, expect, it, vi } from 'vitest'
 import type {
   ProviderRelayChannel,
   ProviderRelaySink
@@ -22,6 +22,7 @@ const update = (sessionUpdate: string, rest: Record<string, unknown>): string =>
 function keptAgent(exits: boolean) {
   let sink: ProviderRelaySink | null = null
   const writes: string[] = []
+  // oxlint-disable-next-line typescript/consistent-type-assertions -- SAFETY: the relayed child calls only these channel members.
   const channel = {
     bind: (_relayId: string, bound: ProviderRelaySink) => {
       sink = bound
@@ -89,8 +90,7 @@ describe('kept ACP agent reattach', () => {
     // The mode changed after the start applies before anything new; the spool waits for release.
     expect(kinds()).toEqual(['current_mode_update'])
     connection.kept?.releaseOutput()
-    await new Promise((resolve) => setTimeout(resolve, 20))
-    expect(kinds()).toEqual(['current_mode_update', 'agent_message_chunk'])
+    await vi.waitFor(() => expect(kinds()).toEqual(['current_mode_update', 'agent_message_chunk']))
     // A later start returns the running session; nothing is sent to the agent.
     await expect(connection.start({ cwd: '/tmp', mcpServers: [] })).resolves.toMatchObject({
       sessionId: 's1'
