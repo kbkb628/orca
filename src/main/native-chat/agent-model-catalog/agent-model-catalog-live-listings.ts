@@ -5,7 +5,10 @@ import type {
   AgentModelCatalogServiceDeps,
   AgentModelCatalogSource
 } from './agent-model-catalog-service-contract'
-import { agentModelCatalogFingerprintForRecord } from './agent-model-catalog-fingerprint'
+import {
+  agentModelCatalogFingerprintForRecord,
+  recordCatalogKey
+} from './agent-model-catalog-fingerprint'
 import { catalogFolder, recordConfiguredDefault } from './agent-model-catalog-workspace'
 import { independentAgentModelCatalog } from '../../../shared/agent-session/options/model-catalog/agent-model-catalog-ownership'
 
@@ -57,6 +60,7 @@ export function createAgentModelCatalogLiveListings(
       deps.listsInChatFolder?.has(origin.provider) ? origin.location.workspaceId : undefined
     )
     const revision = deps.store.retirementRevision(origin.provider)
+    const forgets = deps.store.forgets.current()
     let bound: AgentSessionRecord | undefined =
       'sessionId' in origin ? deps.getRecord(String(origin.sessionId)) : undefined
     let identity = bound && recordIdentity(bound)
@@ -64,7 +68,13 @@ export function createAgentModelCatalogLiveListings(
       () =>
         lease.current() &&
         deps.store.retirementRevision(origin.provider) === revision &&
-        (!bound || recordIdentity(deps.getRecord(bound.sessionId) ?? bound) === identity),
+        (!bound ||
+          (recordIdentity(deps.getRecord(bound.sessionId) ?? bound) === identity &&
+            !deps.store.forgets.since(
+              forgets,
+              origin.provider,
+              recordCatalogKey(bound).accountHome
+            ))),
       {
         release: lease.release,
         bind: (record: AgentSessionRecord) => {
@@ -97,10 +107,11 @@ export function createAgentModelCatalogLiveListings(
       return Promise.resolve()
     }
     const { configuredDefault, ...listed } = listing
+    const accountHome = recordCatalogKey(record).accountHome
     const saved = deps.store.recordSuccess(
       fingerprint,
       record.provider,
-      { ...listed, origin: 'live-session' },
+      { ...listed, origin: 'live-session', ...(accountHome ? { accountHome } : {}) },
       'live'
     )
     if (saved && configuredDefault !== undefined) {

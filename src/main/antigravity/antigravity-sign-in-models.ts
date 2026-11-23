@@ -18,7 +18,7 @@ export function saveSignInModels(
     agentModelCatalogStore.recordSuccess(
       agentModelCatalogFingerprint({ agent: spec.agent, accountHome, wslDistro: null }),
       spec.agent,
-      { models, origin: 'live-session' },
+      { models, origin: 'live-session', accountHome },
       'live'
     )
   }

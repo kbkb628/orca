@@ -20,6 +20,7 @@ import {
   getAntigravityAccountService,
   setAntigravityNativeCredentialChangeListener
 } from '../../antigravity/native-account-host'
+import { forgetPreviousAgyLoginCatalog } from '../../antigravity/antigravity-login-catalog'
 import { createAccountRuntimeTargetSettingsSync } from '../../rate-limits/service/account-runtime-target-sync'
 import { normalizeCodexRuntimeSelection } from '../../codex-accounts/account-management/runtime-selection'
 import { normalizeClaudeRuntimeSelection } from '../../claude-accounts/selection/runtime-selection'
@@ -158,9 +159,10 @@ export function createProviderAccountServices(
   )
   // Hidden Muse meters must not spawn the Muse CLI.
   rateLimits.setMuseUsageEnabledResolver(() => store.getUI().statusBarItems.includes('muse'))
-  setAntigravityNativeCredentialChangeListener(() =>
+  setAntigravityNativeCredentialChangeListener((change) => {
     rateLimits.invalidateAntigravityCredentialState()
-  )
+    forgetPreviousAgyLoginCatalog(change)
+  })
   // agy has one shared login: attribute readings to saved accounts instead of switching to read others.
   rateLimits.setAntigravityAccountUsageRecorder({
     begin: async (target) => (await getAntigravityAccountService(target)).beginUsageRead(),

@@ -3,6 +3,7 @@ import {
   mergedAgentModelCatalogModels
 } from './agent-model-catalog-models'
 import { configuredCatalogChoice } from './agent-model-catalog-configured-row'
+import { keptAgentModelRowsRelistAt, withKeptAgentModelRows } from './agent-model-catalog-kept-rows'
 import * as modelCatalogOwnership from '../../../shared/agent-session/options/model-catalog/agent-model-catalog-ownership'
 import { fillUnknownModelEfforts } from '../../../shared/agent-session/options/model-catalog/agent-session-model-efforts'
 import type { AgentSessionUnavailable } from '../../../shared/agent-session/failures/agent-session-availability'
@@ -11,6 +12,7 @@ import type {
   AgentSessionModelCatalogResult
 } from '../../../shared/agent-session/agent-session-wire'
 import type { AgentSessionModelOption } from '../../../shared/agent-session/options/model-catalog/agent-session-model-option'
+import type { AgentSessionAccountHome } from '../../../shared/agent-session/lifecycle/accounts/agent-session-account-home'
 
 /** Discovery owns configured defaults/freshness; live listings supply membership and effort menus. */
 export type AgentModelCatalogSource = 'discovery' | 'live'
@@ -27,6 +29,8 @@ export type AgentModelCatalogSuccess = {
   launchOnlyModelId?: string
   /** Successful model listings can still report that chats cannot start. */
   unavailable?: AgentSessionUnavailable
+  /** The account home on this machine it was listed under. */
+  accountHome?: AgentSessionAccountHome
 }
 
 export type AgentModelCatalogListing = {
@@ -35,6 +39,10 @@ export type AgentModelCatalogListing = {
   origin: 'live-session' | 'probe'
   at: number
   complete?: boolean
+  /** Rows an earlier probe listed and this one did not, with when that probe listed them. */
+  keptAt?: Record<string, number>
+  /** The account home on this machine it was listed under; forgetting that account drops it. */
+  accountHome?: AgentSessionAccountHome
 }
 
 // Keep wire types independent of the store's Node-only persistence.
@@ -115,6 +123,8 @@ export type AgentModelCatalogEntry = {
   fastModeSupport?: AgentSessionFastModeSupport
   origin: 'live-session' | 'probe'
   fetchedAt: number
+  /** From then on a read lists again: a shown row is aging out or the probe lacked one. */
+  relistAfter?: number
 }
 
 export function agentModelCatalogResultFromEntry(
@@ -148,33 +158,24 @@ export function agentModelCatalogEntry(
   }
   const older = newer === live ? discovered : live
   const fastModeSupport = newer.fastModeSupport ?? older?.fastModeSupport
+  const models = mergedAgentModelCatalogModels(agent, discovered, live, configured).map((model) =>
+    modelCatalogOwnership.independentAgentModelCatalog(agent) && discovered?.complete !== true
+      ? { ...model, isDefault: false }
+      : model
+  )
+  const relistAfter = keptAgentModelRowsRelistAt(agent, discovered, live, models)
   return {
     agent,
     fingerprint,
     discovered,
     live,
     configured,
-    models: mergedAgentModelCatalogModels(
-      discovered,
-      live,
-      configured,
-      modelCatalogOwnership.usesModelSpecificAcpEfforts(agent)
-    ).map((model) =>
-      modelCatalogOwnership.independentAgentModelCatalog(agent) && discovered?.complete !== true
-        ? { ...model, isDefault: false }
-        : model
-    ),
+    models,
     ...(fastModeSupport ? { fastModeSupport } : {}),
     origin: newer.origin,
-    fetchedAt: newer.at
+    fetchedAt: newer.at,
+    ...(relistAfter !== undefined ? { relistAfter } : {})
   }
-}
-
-export function retainedAgentModelCatalogModels(
-  _previous: Pick<AgentModelCatalogEntry, 'models'> | null | undefined,
-  listing: AgentModelCatalogLiveListing
-): AgentSessionModelOption[] {
-  return listing.models
 }
 
 export function agentModelCatalogEntryWithSuccess(
@@ -218,13 +219,12 @@ export function agentModelCatalogEntryWithSuccess(
         : null
     )
   }
-  const incoming = retainedAgentModelCatalogModels(previous, success)
   // A later listing must not forget a menu a chat confirmed; probes stay model-specific-only.
   const models =
     modelCatalogOwnership.usesModelSpecificAcpEfforts(identity.agent) ||
     modelCatalogOwnership.confirmsListedEffortAtSend(identity.agent)
-      ? fillUnknownModelEfforts(incoming, previous?.models ?? [])
-      : incoming
+      ? fillUnknownModelEfforts(success.models, previous?.models ?? [])
+      : success.models
   if (models.length === 0) {
     return null
   }
@@ -238,7 +238,8 @@ export function agentModelCatalogEntryWithSuccess(
     ),
     ...(success.fastModeSupport ? { fastModeSupport: success.fastModeSupport } : {}),
     origin: success.origin,
-    at
+    at,
+    ...(success.accountHome ? { accountHome: success.accountHome } : {})
   }
   let configured = previous?.configured ?? null
   if (agent === 'pi' && source === 'discovery') {
@@ -249,8 +250,9 @@ export function agentModelCatalogEntryWithSuccess(
     }
     return agentModelCatalogEntry(agent, fingerprint, listing, null, configured)
   }
+  const kept = withKeptAgentModelRows(agent, listing, previous?.discovered)
   return source === 'discovery'
-    ? agentModelCatalogEntry(agent, fingerprint, listing, previous?.live ?? null, configured)
+    ? agentModelCatalogEntry(agent, fingerprint, kept, previous?.live ?? null, configured)
     : agentModelCatalogEntry(agent, fingerprint, previous?.discovered ?? null, listing, configured)
 }
 
@@ -314,14 +316,18 @@ export function serializedAgentModelCatalogListing(
   )
 }
 
-/** Exclude clocks so unchanged catalog facts do not trigger disk writes. */
+/** Exclude clocks so unchanged catalog facts do not trigger disk writes, except where rows age
+ *  out by when a listing showed them; those listings save only at probes and chat starts. */
 export function agentModelCatalogListingKey(entry: AgentModelCatalogEntry): string {
   const facts = (listing: AgentModelCatalogListing | null): unknown =>
     listing && [
       listing.origin,
       serializedAgentModelCatalogListing(listing)?.models,
       listing.fastModeSupport ?? null,
-      listing.complete ?? null
+      listing.complete ?? null,
+      ...(modelCatalogOwnership.keepsRicherAgentModelListing(entry.agent)
+        ? [listing.at, listing.keptAt ?? null]
+        : [])
     ]
   return JSON.stringify([
     facts(entry.discovered),

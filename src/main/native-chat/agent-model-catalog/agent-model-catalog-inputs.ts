@@ -1,4 +1,6 @@
 import type { AgentModelCatalogEntry } from './agent-model-catalog-entry'
+import type { AgentModelCatalogAccountForgets } from './agent-model-catalog-account-forgets'
+import type { AgentSessionAccountHome } from '../../../shared/agent-session/lifecycle/accounts/agent-session-account-home'
 import type { AgentModelCatalogFailures } from './agent-model-catalog-failures'
 import type { AgentModelCatalogListingWaiters } from './agent-model-catalog-listing-waiters'
 import { retireAgentModelCatalogListing, type InFlightListing } from './agent-model-catalog-lister'
@@ -16,6 +18,8 @@ export class AgentModelCatalogInputs {
       listingWaiters: AgentModelCatalogListingWaiters
       agents: () => Iterable<string>
       retireAgent: (agent: string) => void
+      forgets: AgentModelCatalogAccountForgets
+      saveNow: () => void
       cap: number
     }
   ) {}
@@ -52,6 +56,33 @@ export class AgentModelCatalogInputs {
       if (key.startsWith(prefix)) {
         this.state.partialAttempts.delete(key)
       }
+    }
+  }
+
+  /** A user's Refresh of one catalog: a listing already running for it stands, else its next read
+   *  lists again past any failure hold. Its agent's other catalogs and chats are untouched. */
+  relistScope(fingerprint: string): void {
+    if (!this.state.refreshes.get(fingerprint)?.current()) {
+      this.expireScope(fingerprint)
+    }
+  }
+
+  /** The account those homes hold changed: their catalogs are deleted, on disk before this returns
+   *  (it throws if it can't), and listings started before it don't save. Other homes keep theirs. */
+  forgetHomes(agent: string, matches: (home: AgentSessionAccountHome) => boolean): void {
+    this.state.forgets.forget(agent, matches)
+    let forgot = false
+    for (const entry of this.state.entries.values()) {
+      const home = entry.discovered?.accountHome ?? entry.live?.accountHome
+      if (entry.agent === agent && home && matches(home)) {
+        this.expireScope(entry.fingerprint)
+        this.state.entries.delete(entry.fingerprint)
+        this.state.dueEntries.delete(entry.fingerprint)
+        forgot = true
+      }
+    }
+    if (forgot) {
+      this.state.saveNow()
     }
   }
 

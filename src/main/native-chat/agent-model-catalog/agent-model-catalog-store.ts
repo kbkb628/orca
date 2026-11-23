@@ -1,4 +1,6 @@
 import { AgentModelCatalogInputs } from './agent-model-catalog-inputs'
+import { AgentModelCatalogAccountForgets } from './agent-model-catalog-account-forgets'
+import type { AgentSessionAccountHome } from '../../../shared/agent-session/lifecycle/accounts/agent-session-account-home'
 import { createAgentModelEffortDiscovery } from './agent-model-catalog-effort-discovery'
 import { createAgentModelCatalogFences } from './agent-model-catalog-fences'
 import {
@@ -7,7 +9,8 @@ import {
   createAgentModelCatalogSuccessWriter,
   retireAgentModelCatalogObservations,
   agentModelCatalogLaunchAgents,
-  agentModelCatalogEntryIsStale
+  agentModelCatalogEntryIsStale,
+  withoutExpiredKeptRows
 } from './agent-model-catalog-entry-lifetime'
 import { independentAgentModelCatalog } from '../../../shared/agent-session/options/model-catalog/agent-model-catalog-ownership'
 export type { AgentModelCatalogProbe } from './agent-model-catalog-discovery'
@@ -68,6 +71,7 @@ export class AgentModelCatalogStore {
   private readonly retirementRevisions = new Map<string, number>()
   // Aborts when an agent's scopes are next retired.
   readonly retirements = createAgentModelCatalogFences<string>()
+  readonly forgets = new AgentModelCatalogAccountForgets()
   private readonly retiredObservations = new Set<string>()
   private persistence: AgentModelCatalogPersistence | null = null
   readonly efforts: ReturnType<typeof createAgentModelEffortDiscovery>
@@ -85,6 +89,8 @@ export class AgentModelCatalogStore {
       listingWaiters: this.listingWaiters,
       agents: () => agentModelCatalogLaunchAgents(this.retirementRevisions, this.entries),
       retireAgent: (agent) => this.expireFailures(agent),
+      forgets: this.forgets,
+      saveNow: () => this.persistence?.saveNow(() => [...this.entries.values()]),
       cap: AGENT_MODEL_CATALOG_MAX_ENTRIES
     })
     this.efforts = createAgentModelEffortDiscovery({
@@ -125,7 +131,9 @@ export class AgentModelCatalogStore {
 
   /** A known superseded invocation cannot be certified by resolving its old base key again. */
   observation(fingerprint: string): AgentModelCatalogEntry | null {
-    return this.retiredObservations.has(fingerprint) ? null : this.get(fingerprint)
+    return this.retiredObservations.has(fingerprint)
+      ? null
+      : withoutExpiredKeptRows(this.get(fingerprint), this.now())
   }
 
   /** Whether any account's catalog of `agent` is saved here. */
@@ -134,21 +142,14 @@ export class AgentModelCatalogStore {
   }
 
   /** Live saves must not delay account-level discovery. */
-  isStale(entry: AgentModelCatalogEntry): boolean {
-    return agentModelCatalogEntryIsStale(entry, this.dueEntries.has(entry.fingerprint))
-  }
+  isStale = (entry: AgentModelCatalogEntry): boolean =>
+    agentModelCatalogEntryIsStale(entry, this.dueEntries.has(entry.fingerprint), this.now())
 
-  failureDetail(fingerprint: string): string | null {
-    return this.failures.detail(fingerprint)
-  }
+  failureDetail = (fingerprint: string): string | null => this.failures.detail(fingerprint)
 
-  hasActiveFailure(fingerprint: string): boolean {
-    return this.failures.isActive(fingerprint)
-  }
+  hasActiveFailure = (fingerprint: string): boolean => this.failures.isActive(fingerprint)
 
-  failure(fingerprint: string): AgentModelCatalogFailure | null {
-    return this.failures.get(fingerprint)
-  }
+  failure = (fingerprint: string): AgentModelCatalogFailure | null => this.failures.get(fingerprint)
 
   retirementRevision(agent: string): number {
     const revision = this.retirementRevisions.get(agent) ?? 0
@@ -183,17 +184,13 @@ export class AgentModelCatalogStore {
     this.inputs.observeInputs(fingerprint, stamp)
   }
 
-  refreshInputs(userInitiated: boolean): void {
-    this.inputs.refreshInputs(userInitiated)
-  }
+  refreshInputs = (userInitiated: boolean): void => this.inputs.refreshInputs(userInitiated)
 
-  expireScopes(agent?: string): void {
-    this.inputs.expireScopes(agent)
-  }
+  expireScopes = (agent?: string): void => this.inputs.expireScopes(agent)
 
-  expireFailure(fingerprint: string): void {
-    this.failures.expire(fingerprint)
-  }
+  relistScope = (fingerprint: string): void => this.inputs.relistScope(fingerprint)
+
+  expireFailure = (fingerprint: string): void => this.failures.expire(fingerprint)
 
   expireAgent(agent: string): void {
     this.retireListings(agent)
@@ -206,6 +203,9 @@ export class AgentModelCatalogStore {
     )
     this.failures.expireAgent(agent)
   }
+
+  forgetAccountHomes = (...forgot: Parameters<AgentModelCatalogInputs['forgetHomes']>): void =>
+    this.inputs.forgetHomes(...forgot)
 
   recordSuccess(
     fingerprint: string,
@@ -258,7 +258,8 @@ export class AgentModelCatalogStore {
     agent: string,
     listModels: AgentModelCatalogListModels,
     budget?: AgentModelCatalogListingBudget,
-    selectedModel?: string
+    selectedModel?: string,
+    accountHome?: AgentSessionAccountHome | null
   ): Promise<AgentModelCatalogEntry | null> {
     this.isListing(fingerprint)
     return refreshAgentModelCatalogListing({
@@ -279,7 +280,7 @@ export class AgentModelCatalogStore {
         }
         this.partialAttempts.delete(fingerprint)
       },
-      writeSuccess: (...args) => this.writeSuccess(...args)
+      writeSuccess: this.forgets.writer(agent, accountHome, this.writeSuccess)
     })
   }
 
@@ -293,9 +294,7 @@ export class AgentModelCatalogStore {
     return this.refreshes.has(fingerprint)
   }
 
-  clearPartialAttempts(): void {
-    this.partialAttempts.clear()
-  }
+  clearPartialAttempts = (): void => this.partialAttempts.clear()
 
   verified(entry: AgentModelCatalogEntry): boolean {
     return (

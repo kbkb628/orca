@@ -5,21 +5,30 @@ import type {
   AgentModelCatalogConfiguredDefault,
   AgentModelCatalogConfiguredChoice
 } from './agent-model-catalog-entry'
+import { usesModelSpecificAcpEfforts } from '../../../shared/agent-session/options/model-catalog/agent-model-catalog-ownership'
+import { agentModelRowListedAt, keptAgentModelRows } from './agent-model-catalog-kept-rows'
 
 /** Newer listings own membership/menus; configured facts then discovery/live determine defaults. */
 export function mergedAgentModelCatalogModels(
+  agent: string,
   discovered: AgentModelCatalogListing | null,
   live: AgentModelCatalogListing | null,
-  configured: AgentModelCatalogConfiguredDefault | null,
-  modelSpecificEfforts = false
+  configured: AgentModelCatalogConfiguredDefault | null
 ): AgentSessionModelOption[] {
+  const modelSpecificEfforts = usesModelSpecificAcpEfforts(agent)
   const liveIsNewer = live !== null && (discovered === null || live.at >= discovered.at)
   const newer = liveIsNewer ? live : discovered
   const older = liveIsNewer ? discovered : live
-  return (newer?.models ?? []).map((model) => {
-    const listed = discovered?.models.find((entry) => entry.id === model.id)
-    const reported = live?.models.find((entry) => entry.id === model.id)
-    const olderModel = older?.models.find((entry) => entry.id === model.id)
+  return keptAgentModelRows(agent, newer, older).map((row) => {
+    const listed = discovered?.models.find((entry) => entry.id === row.id)
+    const reported = live?.models.find((entry) => entry.id === row.id)
+    // Per row: a probe's kept copy is as old as the probe that listed it.
+    const liveRowIsNewer =
+      reported !== undefined &&
+      (listed === undefined ||
+        agentModelRowListedAt(live, row.id)! >= agentModelRowListedAt(discovered, row.id)!)
+    const model = (liveRowIsNewer ? reported : listed) ?? row
+    const olderModel = liveRowIsNewer ? listed : reported
     const olderEfforts = olderModel?.efforts ?? []
     const runsConfigured =
       configured?.modelId === model.id || configured?.sameModelIds?.includes(model.id) === true
@@ -28,7 +37,7 @@ export function mergedAgentModelCatalogModels(
       menu.some((choice) => choice.value === configuredEffort)
     // Coarser probe menus must not discard a chat-confirmed effort unless a newer chat menu does.
     const keepsChatMenu =
-      older === live && !offersConfigured(model.efforts) && offersConfigured(olderEfforts)
+      !liveRowIsNewer && !offersConfigured(model.efforts) && offersConfigured(olderEfforts)
     // Chat-only levels belong to the menu they came with.
     const {
       efforts: keptEfforts,

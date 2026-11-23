@@ -15,9 +15,11 @@ import {
 } from './agent-model-catalog-entry'
 import { isStructuredAgentId } from '../../../shared/agent-session/lifecycle/provider-handles/agent-session-provider-handle-encoding'
 import { isRecord } from '../../../shared/agent-status/child-work/agent-status-child-work-value-guards'
+import { isAgentSessionAccountHome } from '../../../shared/agent-session/lifecycle/accounts/agent-session-account-home'
 
-// Older catalogs lack serviceTiers and cannot safely construct Fast requests.
-const SCHEMA_VERSION = 3
+// Older catalogs lack serviceTiers and cannot safely construct Fast requests. Version 3 keys held a
+// NUL, which Node 24's SQLite returns cut at it, so those rows could not be replaced or deleted.
+const SCHEMA_VERSION = 4
 const SAVE_COALESCE_MS = 500
 const MAX_RETRY_DELAY_MS = 60_000
 
@@ -27,6 +29,8 @@ export type AgentModelCatalogPersistence = {
   save: (snapshot: () => readonly AgentModelCatalogEntry[]) => void
   /** Flush at quit because the delayed-save timer is unref'd. */
   flush: () => Promise<void>
+  /** Writes before returning, for a change that must outlast a crash; throws when it can't. */
+  saveNow: (snapshot: () => readonly AgentModelCatalogEntry[]) => void
 }
 
 function asRecord(value: unknown): Record<string, unknown> | null {
@@ -112,6 +116,9 @@ function parseListing(value: unknown): AgentModelCatalogListing | null {
   const support = asRecord(row.fastModeSupport)
   const supported = support?.supported
   const supportReason = text(support?.reason)
+  const keptAt = Object.entries(asRecord(row.keptAt) ?? {}).filter(
+    (kept): kept is [string, number] => typeof kept[1] === 'number'
+  )
   return {
     models: models.filter((model): model is AgentSessionModelOption => model !== null),
     ...(typeof supported === 'boolean'
@@ -124,7 +131,9 @@ function parseListing(value: unknown): AgentModelCatalogListing | null {
       : {}),
     origin: row.origin,
     at: row.at,
-    ...(row.complete === true ? { complete: true } : {})
+    ...(row.complete === true ? { complete: true } : {}),
+    ...(keptAt.length ? { keptAt: Object.fromEntries(keptAt) } : {}),
+    ...(isAgentSessionAccountHome(row.accountHome) ? { accountHome: row.accountHome } : {})
   }
 }
 
@@ -177,7 +186,7 @@ function parseEntries(values: readonly unknown[]): AgentModelCatalogEntry[] {
 
 function catalogRow(entry: AgentModelCatalogEntry): KeyedJsonRow {
   return {
-    key: `${entry.agent}\u0000${entry.fingerprint}`,
+    key: JSON.stringify([entry.agent, entry.fingerprint]),
     json: JSON.stringify(persistedEntry(entry))
   }
 }
@@ -258,6 +267,15 @@ export function createAgentModelCatalogFilePersistence(
     save(snapshot) {
       pending = snapshot
       schedule(SAVE_COALESCE_MS)
+    },
+    saveNow(snapshot) {
+      pending = snapshot
+      // Rows this session could not read are replaced too: what they held must not come back.
+      cold = false
+      void flush()
+      if (pending !== null) {
+        throw new Error('Orca could not save its model catalogs.')
+      }
     },
     flush
   }

@@ -7,6 +7,7 @@ import { useSetupModelHighlight } from './use-setup-model-highlight'
 import { AgentPickerLegacyModelsToggle } from './AgentPickerLegacyModelsToggle'
 import { useLegacyModelsExpanded } from './use-legacy-models-expanded'
 import { AgentLaunchInstallPrompt } from './AgentLaunchInstallPrompt'
+import { AgentPickerRefreshModelsButton } from './AgentPickerRefreshModelsButton'
 import { retryAgentPickerCatalog } from './agent-launch-picker-acquisition'
 import {
   AgentPickerChoiceRows,
@@ -277,6 +278,7 @@ export function AgentLaunchSetupPanel({
           placeholder={t('agentPicker.searchAgentModels', 'Search {{agent}} models…', {
             agent: entry.label
           })}
+          trailing={searching ? null : <AgentPickerRefreshModelsButton {...{ entry, disabled }} />}
         />
         {!installed && !searching ? (
           <AgentLaunchInstallPrompt entry={entry} />

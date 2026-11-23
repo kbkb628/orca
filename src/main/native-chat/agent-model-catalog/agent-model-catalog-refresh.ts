@@ -46,6 +46,8 @@ export type AgentModelCatalogRefresh = {
   hold: (reader: AgentModelCatalogReadOperation) => void
   /** Also lists efforts for a reader's selected model. */
   want: (model: string | undefined) => void
+  /** Lists its catalog again once its scope is resolved (a user's Refresh). */
+  relist: () => void
 }
 
 type Held = AgentModelCatalogRefresh & { workspaceId?: string; end: () => void }
@@ -90,6 +92,8 @@ export function createAgentModelCatalogRefreshes(context: {
     let register: ((holder?: AbortSignal) => void) | undefined
     let demand: ((model: string) => void) | undefined
     let projecting: Promise<void> | undefined
+    let relisting = false
+    let resolvedFingerprint: string | undefined
     const run = async (): Promise<void> => {
       const facts = await bounded(resolveAgentModelCatalogAccount(deps, launch, current))
       if (!facts) {
@@ -147,6 +151,10 @@ export function createAgentModelCatalogRefreshes(context: {
         return
       }
       const { fingerprint, exact, resolved, cwd } = scope
+      if (relisting) {
+        deps.store.relistScope(fingerprint)
+      }
+      resolvedFingerprint = fingerprint
       Object.assign(bound, { fingerprint, exact, cwd })
       bindAgentModelCatalogScope(bindings, launch.bindingKey, bound, requestKey)
       const probe = deps.probes?.[agent]
@@ -181,7 +189,9 @@ export function createAgentModelCatalogRefreshes(context: {
               void task.finally(() => tasks.delete(task)).catch(() => {})
               return task
             },
-            { signal: holder, lifetime, admission: accountAdmission }
+            { signal: holder, lifetime, admission: accountAdmission },
+            undefined,
+            probeHome
           )
         }
         register = (holder) => {
@@ -258,6 +268,13 @@ export function createAgentModelCatalogRefreshes(context: {
         if (model && !targets.has(model)) {
           targets.add(model)
           demand?.(model)
+        }
+      },
+      relist: () => {
+        relisting = true
+        if (resolvedFingerprint !== undefined && current()) {
+          deps.store.relistScope(resolvedFingerprint)
+          register?.()
         }
       },
       workspaceId: launch.records.record?.location.workspaceId,
