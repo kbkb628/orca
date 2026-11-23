@@ -8,6 +8,7 @@ import {
 import type { RelayedProviderChild } from '../../provider-relay/relayed-provider-child'
 import { isJsonRpcAnswerAbove, jsonRpcResultOf } from '../../provider-relay/relayed-json-rpc-lines'
 import type { ProviderProcessLaunch } from '../../provider-process/provider-process-launch'
+import { AgentSessionPreSpawnError } from '../../native-chat/agent-session-wire/providers/structured-agent-session-adapter-errors'
 
 const SESSION_STARTS = ['session/new', 'session/load', 'session/resume']
 const PROMPT = 'session/prompt'
@@ -83,14 +84,19 @@ export function acpKeptAgent(child: RelayedProviderChild): AcpKeptAgent {
 export async function launchRelayedAcpAgent(
   launch: ProviderProcessLaunch,
   chatKey: string,
-  abandoned: () => boolean
+  abandoned: () => boolean,
+  release?: () => Promise<void>
 ): Promise<RelayedProviderProcess | null> {
   // Answers to this app's own requests pass a reattach's hold; everything else waits for the chat.
   let floor = Number.POSITIVE_INFINITY
   const relayed = await launchRelayedProviderProcess(
     launch,
     acpRelayLaunch(chatKey, (line) => isJsonRpcAnswerAbove(line, floor))
-  )
+  ).catch(async (refused: unknown) => {
+    // A kept agent that can't be reached yet refuses the start; nothing ran, so the launch's files go.
+    await release?.().catch(() => undefined)
+    throw new AgentSessionPreSpawnError(refused)
+  })
   floor = relayed?.child.attachResult?.maxClientRequestId ?? 0
   // The chat closed meanwhile: its agent ends here, before any connection owns it.
   if (relayed && abandoned()) {
