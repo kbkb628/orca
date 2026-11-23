@@ -140,8 +140,8 @@ export function keptAcpSessionStart(
   if (sessionId === undefined) {
     return null
   }
-  const parsed = (kept.method === 'session/load' ? loadSessionSchema : resumeSessionSchema).safeParse(
-    kept.result
-  )
+  const parsed = (
+    kept.method === 'session/load' ? loadSessionSchema : resumeSessionSchema
+  ).safeParse(kept.result)
   return parsed.success ? { kind: 'resume', sessionId, response: parsed.data } : null
 }

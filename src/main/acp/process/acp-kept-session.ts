@@ -21,7 +21,8 @@ function readNotification(line: string): { method: string; params: unknown } | n
     if (typeof message !== 'object' || message === null || 'id' in message) {
       return null
     }
-    const { method, params } = message as { method?: unknown; params?: unknown }
+    const method = 'method' in message ? message.method : undefined
+    const params = 'params' in message ? message.params : undefined
     return typeof method === 'string' ? { method, params } : null
   } catch {
     return null

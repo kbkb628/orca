@@ -1,9 +1,4 @@
-import {
-  readAcpResponse,
-  type AcpPendingResponse,
-  type AcpRequestOptions,
-  type AcpResponse
-} from './acp-response-settlement'
+import type { AcpPendingResponse, AcpRequestOptions, AcpResponse } from './acp-response-settlement'
 import type { AcpJsonRpcMessage } from './acp-rpc-envelope'
 
 type EarlierCall = AcpPendingResponse & { matches: (frame: AcpJsonRpcMessage) => boolean }
@@ -45,7 +40,7 @@ export class AcpPendingCalls {
     return new Promise<T>((resolve, reject) => {
       const answer = (response: AcpResponse): void => {
         try {
-          resolve(readAcpResponse(response, settle) as T)
+          resolve(settle(response))
         } catch (error) {
           reject(error)
         }

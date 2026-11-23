@@ -225,13 +225,16 @@ describe('provider relay pending requests', () => {
   })
 })
 
+/** One JSON-RPC line as the agent or client writes it. */
+type RpcLine = Record<string, unknown>
+
 describe('provider relay kept lines', () => {
-  const agent = (pending: ProviderRelayPendingRequests, seq: number, message: object): void =>
+  const agent = (pending: ProviderRelayPendingRequests, seq: number, message: RpcLine): void =>
     pending.observeAgentLine({ seq, line: JSON.stringify(message) })
-  const client = (pending: ProviderRelayPendingRequests, message: object): void => {
+  const client = (pending: ProviderRelayPendingRequests, message: RpcLine): void => {
     pending.releaseAnswered(pending.observeClientData(`${JSON.stringify(message)}\n`))
   }
-  const configUpdate = (value: string) => ({
+  const configUpdate = (value: string): RpcLine => ({
     method: 'session/update',
     params: { update: { sessionUpdate: 'config_option_update', configOptions: [value] } }
   })
