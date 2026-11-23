@@ -101,7 +101,7 @@ describe('#47817 OpenCode stalled turn', () => {
     await expect(
       rig.adapter.cancelTurn({ sessionId: SESSION, fence: 1, stoppedAt })
     ).resolves.toEqual({ cancelled: true })
-    expect(rig.sent('session/cancel')).toHaveLength(1)
+    await rig.frame('session/cancel')
     await rig.adapter.awaitStoppedRequestEnd!(SESSION, stoppedAt)
     expect(Date.now() - stoppedAt).toBeLessThan(1_000)
     // What the host's stopAgent does once grace expires.
