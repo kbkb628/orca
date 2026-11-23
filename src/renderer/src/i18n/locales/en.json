@@ -28079,7 +28079,10 @@
       "runNow": "Run now",
       "openOnPage": "Open on Automations page",
       "pauseShort": "Pause",
-      "resumeShort": "Resume"
+      "resumeShort": "Resume",
+      "deleting": "Deleting…",
+      "deleteFailed": "Couldn’t delete {{name}}",
+      "deleteDescription": "Delete <name/> and its run history."
     },
     "access": {
       "thisComputer": "this computer",

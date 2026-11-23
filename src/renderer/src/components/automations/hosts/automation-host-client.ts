@@ -1,5 +1,8 @@
 import { callRuntimeRpc } from '@/runtime/rpc/calls/runtime-rpc-call'
 import { getPairedWebClientEnvironmentId } from '@/app-shell/platform/paired-web-client-host'
+import { botTarget, type BotOnHost } from '@/lib/bot-hosts'
+import type { BotDeleteAuthority } from '@/components/bots/bot-read-authority'
+import type { RuntimeClientTarget } from '../../../../../shared/remote-runtime/host-catalog/runtime-client-target'
 import { prepareAutomationLaunchSetup } from './automation-capability-probe'
 import type {
   Automation,
@@ -211,6 +214,45 @@ export async function deleteAutomationForTarget(
 ): Promise<void> {
   const target = getAutomationOwnerTarget(automation, sourceTarget)
   await callRuntimeRpc(target, 'automation.delete', { id: automation.id }, { timeoutMs: 15_000 })
+}
+
+/** Where a bot automation's delete may go: only the incarnation that listed it, never a recapture. */
+export function botAutomationDeleteRoute(
+  authority: BotDeleteAuthority,
+  target: RuntimeClientTarget
+): { target: AutomationHostTarget; expectedEnvironmentPairingRevision?: number } | null {
+  if (authority.kind === 'local') {
+    return target.kind === 'local' ? { target: { kind: 'local' } } : null
+  }
+  return target.kind === 'environment' && target.environmentId === authority.environmentId
+    ? {
+        target: { kind: 'environment', environmentId: authority.environmentId },
+        expectedEnvironmentPairingRevision: authority.pairingRevision
+      }
+    : null
+}
+
+/** Deletes a bot's automation on the host incarnation whose read listed it. */
+export async function deleteBotAutomation(
+  bot: BotOnHost,
+  automationId: string,
+  authority: BotDeleteAuthority
+): Promise<void> {
+  const route = botAutomationDeleteRoute(authority, botTarget(bot))
+  if (!route) {
+    throw new Error('The bot moved to another host since its automations were read.')
+  }
+  await callRuntimeRpc(
+    route.target,
+    'automation.delete',
+    { id: automationId },
+    {
+      timeoutMs: 15_000,
+      ...(route.expectedEnvironmentPairingRevision === undefined
+        ? {}
+        : { expectedEnvironmentPairingRevision: route.expectedEnvironmentPairingRevision })
+    }
+  )
 }
 
 export async function runAutomationNowForTarget(
