@@ -107,6 +107,11 @@ export class RelayedProviderChild extends EventEmitter implements ProviderChild 
     return this.output.keptLines
   }
 
+  /** Read once at reattach; a stream-drop reattach sends them again. */
+  dropKeptLines(): void {
+    this.output.keptLines.clear()
+  }
+
   get handedOff(): boolean {
     return this.state === 'detached'
   }

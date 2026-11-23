@@ -2,32 +2,15 @@ import type { z } from 'zod'
 import type { RelayedProviderChild } from '../../provider-relay/relayed-provider-child'
 import type { RelayedProviderProcess } from '../../provider-relay/app-provider-relays'
 import { settleAcpSessionCall } from '../protocol/acp-session-call'
-import { keptAcpSessionStart } from '../protocol/acp-session-setup'
 import type { AcpPendingCalls } from '../transport/acp-pending-calls'
 import {
-  ACP_PROTOCOL_VERSION,
-  InitializeResponseSchema,
   PromptResponseSchema,
   type InitializeResponse,
   type PromptResponse
 } from '../generated/acp-protocol.generated'
-import { acpKeptAgent, type AcpKeptAgent } from './acp-kept-agent'
+import { acpKeptAgent, restorableAcpSession, type AcpKeptAgent } from './acp-kept-agent'
 
 const SESSION_STARTS = new Set(['session/new', 'session/load', 'session/resume'])
-
-function readNotification(line: string): { method: string; params: unknown } | null {
-  try {
-    const message: unknown = JSON.parse(line)
-    if (typeof message !== 'object' || message === null || 'id' in message) {
-      return null
-    }
-    const method = 'method' in message ? message.method : undefined
-    const params = 'params' in message ? message.params : undefined
-    return typeof method === 'string' ? { method, params } : null
-  } catch {
-    return null
-  }
-}
 
 /**
  * An ACP agent kept running under the terminal daemon from before this app started. It is
@@ -36,7 +19,6 @@ function readNotification(line: string): { method: string; params: unknown } | n
  */
 export class AcpKeptSession {
   private readonly kept: AcpKeptAgent
-  private initialized: Promise<InitializeResponse> | null
   private startTaken = false
 
   constructor(
@@ -46,37 +28,36 @@ export class AcpKeptSession {
     private readonly notify: (method: string, params: unknown) => void
   ) {
     this.kept = acpKeptAgent(child)
+    child.dropKeptLines()
     calls.startAbove(this.kept.requestFloor)
-    const initialize = InitializeResponseSchema.safeParse(this.kept.initialize)
-    this.initialized =
-      initialize.success && initialize.data.protocolVersion === ACP_PROTOCOL_VERSION
-        ? Promise.resolve(initialize.data)
-        : null
   }
 
-  /** Null: nothing usable was kept, so the agent is asked. */
-  initialize(): Promise<InitializeResponse> | null {
-    return this.initialized
+  /** The agent is initialized already; a second `initialize` is not part of the protocol. */
+  initialize(): Promise<InitializeResponse> {
+    const { initialize } = this.kept
+    return initialize
+      ? Promise.resolve(initialize)
+      : Promise.reject(new Error('agent_kept_running_unrestorable'))
   }
 
-  /** The kept answer to the first session start, then the state it changed to since; undefined asks the agent. */
+  /** Session starts answer from the kept session, once, then its state since; never reaches the
+   *  agent (a reload replays history and may replace the live session). Undefined: not a start. */
   answerStart<T>(
     method: string,
     params: unknown,
     schema: z.ZodType<T>,
     received?: (response: T) => void
   ): Promise<T> | undefined {
-    const start = this.kept.sessionStart
-    if (this.startTaken || !start || !SESSION_STARTS.has(method)) {
+    if (!SESSION_STARTS.has(method)) {
       return undefined
     }
     const sessionId =
       typeof params === 'object' && params !== null && 'sessionId' in params
         ? String(params.sessionId)
         : undefined
-    const started = keptAcpSessionStart(start, sessionId)
+    const started = this.startTaken ? null : restorableAcpSession(this.kept, sessionId)
     if (!started) {
-      return undefined
+      return Promise.reject(new Error('agent_kept_running_unrestorable'))
     }
     this.startTaken = true
     try {
@@ -89,10 +70,9 @@ export class AcpKeptSession {
         value: started.response
       })
       // Mode, config and commands changed since the start apply before anything new.
-      for (const line of this.kept.stateLines) {
-        const update = readNotification(line)
-        if (update) {
-          this.notify(update.method, update.params)
+      for (const { sessionId: updated, update } of this.kept.updates) {
+        if (updated === undefined || updated === started.sessionId) {
+          this.notify('session/update', { sessionId: started.sessionId, update })
         }
       }
       return Promise.resolve(answer)

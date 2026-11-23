@@ -104,10 +104,13 @@ export async function acquireAcpStructuredSession(input: {
     cwd: launch.cwd,
     ...acpProcessEnvironment(launch)
   }
-  // A private temp folder is this launch's own and cleaned at its exit, so it can't outlive the app.
-  const relayed = spec.privateTempDirectory
-    ? null
-    : await launchRelayedAcpAgent(processLaunch, sessionId, input.abandoned, launch.release)
+  const relayed = await launchRelayedAcpAgent({
+    spec,
+    launch,
+    process: processLaunch,
+    chatKey: sessionId,
+    abandoned: input.abandoned
+  })
   const connection = connect(processLaunch, {
     ...(relayed ? { relayed } : {}),
     clientInfo: acpClientInfo(spec, launch.version ?? null),

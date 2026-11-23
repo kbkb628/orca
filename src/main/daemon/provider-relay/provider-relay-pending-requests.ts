@@ -38,6 +38,7 @@ const RESOLVED_METHOD_ESCAPED = 'serverRequest\\/resolved'
 /** Kept lines share the record's memory budget with held requests; past these one is dropped. */
 const MAX_KEPT_LINE_CHARS = 1024 * 1024
 const MAX_KEPT_CHARS = 2 * 1024 * 1024
+const MARKER_SCAN_CHARS = 64 * 1024
 /** Client requests awaited for keeping or listing; a client that never gets answers can't grow the map. */
 const MAX_AWAITED_REQUESTS = 64
 
@@ -172,9 +173,13 @@ export class ProviderRelayPendingRequests {
 
   observeAgentLine(record: ProviderRelayRecord): void {
     const { line } = record
-    for (const marker of this.keep?.lines ?? []) {
-      if (line.includes(marker)) {
-        this.keepLine(`l:${marker}`, record)
+    // Markers name a message kind, which comes before its payload; only a bounded head is scanned.
+    if (this.keep && this.keep.lines.length > 0) {
+      const head = line.length > MARKER_SCAN_CHARS ? line.slice(0, MARKER_SCAN_CHARS) : line
+      for (const marker of this.keep.lines) {
+        if (head.includes(marker)) {
+          this.keepLine(`l:${marker}`, record)
+        }
       }
     }
     const maybeRpcRequest =
@@ -185,8 +190,9 @@ export class ProviderRelayPendingRequests {
     const maybeControl = line.includes('control_')
     // Until the initialize answer is seen, any line shaped like an answer is parsed for it.
     const awaitingInitialize = this.initializeKey !== null && this.initializeResult === null
+    // Every answer names its id; tool output quoting "result" mid-turn is not parsed for it.
     const maybeAnswer =
-      (awaitingInitialize || this.awaited.size > 0) &&
+      (awaitingInitialize || (this.awaited.size > 0 && line.includes('"id"'))) &&
       (line.includes('"result"') || line.includes('"error"'))
     if (!maybeRpcRequest && !maybeControl && !maybeAnswer && !mayHideKey(line)) {
       return

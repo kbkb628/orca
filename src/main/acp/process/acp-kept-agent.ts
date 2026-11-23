@@ -9,14 +9,28 @@ import type { RelayedProviderChild } from '../../provider-relay/relayed-provider
 import { isJsonRpcAnswerAbove, jsonRpcResultOf } from '../../provider-relay/relayed-json-rpc-lines'
 import type { ProviderProcessLaunch } from '../../provider-process/provider-process-launch'
 import { AgentSessionPreSpawnError } from '../../native-chat/agent-session-wire/providers/structured-agent-session-adapter-errors'
+import {
+  ACP_PROTOCOL_VERSION,
+  InitializeResponseSchema,
+  type InitializeResponse
+} from '../generated/acp-protocol.generated'
+import { keptAcpSessionStart, type AcpSessionStarted } from '../protocol/acp-session-setup'
+import type { AcpLaunchSpec } from '../launch/acp-launch-contract'
+import type { AcpStructuredLaunch } from '../launch/acp-structured-launch-resolution'
 
 const SESSION_STARTS = ['session/new', 'session/load', 'session/resume']
+const SET_CONFIG = 'session/set_config_option'
 const PROMPT = 'session/prompt'
+const STATE_UPDATES = ['config_option_update', 'current_mode_update', 'available_commands_update']
 
-/** Session state the daemon keeps for the next app: the start answer and the latest state updates. */
+/** Session state the daemon keeps for the next app: the start answer and the latest state updates.
+ *  Markers name the update kind as a JSON key and value, so text inside a string never matches. */
 const ACP_RELAY_KEEP: ProviderRelayKeepSpec = {
-  answers: SESSION_STARTS,
-  lines: ['"config_option_update"', '"current_mode_update"', '"available_commands_update"'],
+  answers: [...SESSION_STARTS, SET_CONFIG],
+  lines: STATE_UPDATES.flatMap((kind) => [
+    `"sessionUpdate":"${kind}"`,
+    `"sessionUpdate": "${kind}"`
+  ]),
   // An unanswered prompt is a running turn; the daemon never idle-stops it.
   outstanding: [PROMPT]
 }
@@ -24,31 +38,58 @@ const ACP_RELAY_KEEP: ProviderRelayKeepSpec = {
 /** An ACP turn is its prompt's request; no agent line marks it, so the daemon tracks the request. */
 const ACP_RELAY_WORK_MARKERS: ProviderRelayWorkMarkers = { workStarts: [], workEnds: [] }
 
-function acpRelayLaunch(
-  chatKey: string,
-  passWhileHeld: (line: string) => boolean
-): ProviderRelayLaunch {
-  return { chatKey, markers: ACP_RELAY_WORK_MARKERS, keep: ACP_RELAY_KEEP, passWhileHeld }
-}
+/** A kept state change, replayed as the `session/update` the agent sent or implied. */
+export type AcpKeptUpdate = { sessionId: string | undefined; update: Record<string, unknown> }
 
 /** What a reattached agent already did for the app that started it. */
 export type AcpKeptAgent = {
   /** The earlier app's highest request id; this app's ids start above it. */
   requestFloor: number
-  /** The kept agent's `initialize` result. */
-  initialize: unknown
+  initialize: InitializeResponse | null
   /** The latest session start the agent answered. */
   sessionStart: { method: string; result: unknown } | null
-  /** `session/update` lines kept since that start, oldest first. */
-  stateLines: string[]
+  /** State changes since that start, oldest first. */
+  updates: AcpKeptUpdate[]
   /** The earlier app's prompt the agent still owes an answer; null when none is listed. */
   earlierPromptId: number | null
+}
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null && !Array.isArray(value)
+}
+
+/** A kept line as a state update: a listed `session/update`, or a config write's answer. */
+function keptUpdate(name: string, line: string): AcpKeptUpdate | null {
+  if (name === `a:${SET_CONFIG}`) {
+    const result = jsonRpcResultOf(line)
+    return isRecord(result) && Array.isArray(result.configOptions)
+      ? {
+          sessionId: undefined,
+          update: { sessionUpdate: 'config_option_update', configOptions: result.configOptions }
+        }
+      : null
+  }
+  let message: unknown
+  try {
+    message = JSON.parse(line)
+  } catch {
+    return null
+  }
+  if (!isRecord(message) || message.method !== 'session/update' || !isRecord(message.params)) {
+    return null
+  }
+  const { sessionId, update } = message.params
+  return isRecord(update) &&
+    typeof update.sessionUpdate === 'string' &&
+    STATE_UPDATES.includes(update.sessionUpdate)
+    ? { sessionId: typeof sessionId === 'string' ? sessionId : undefined, update }
+    : null
 }
 
 export function acpKeptAgent(child: RelayedProviderChild): AcpKeptAgent {
   const attach = child.attachResult
   let sessionStart: (AcpKeptAgent['sessionStart'] & { seq: number }) | null = null
-  const states: { seq: number; line: string }[] = []
+  const updates: { seq: number; update: AcpKeptUpdate }[] = []
   for (const { seq, name } of attach?.kept ?? []) {
     const line = child.keptLines.get(seq)
     if (line === undefined) {
@@ -59,47 +100,82 @@ export function acpKeptAgent(child: RelayedProviderChild): AcpKeptAgent {
       if (!sessionStart || seq > sessionStart.seq) {
         sessionStart = { method, result: jsonRpcResultOf(line), seq }
       }
-    } else if (name.startsWith('l:')) {
-      states.push({ seq, line })
+      continue
+    }
+    const update = keptUpdate(name, line)
+    if (update) {
+      updates.push({ seq, update })
     }
   }
   const startSeq = sessionStart?.seq ?? Number.POSITIVE_INFINITY
   const prompt = (attach?.outstanding ?? []).findLast((request) => request.method === PROMPT)
+  const initialize = InitializeResponseSchema.safeParse(jsonRpcResultOf(child.initializeLine))
   return {
     requestFloor: attach?.maxClientRequestId ?? 0,
-    initialize: jsonRpcResultOf(child.initializeLine),
+    initialize:
+      initialize.success && initialize.data.protocolVersion === ACP_PROTOCOL_VERSION
+        ? initialize.data
+        : null,
     sessionStart: sessionStart && { method: sessionStart.method, result: sessionStart.result },
-    stateLines: states
-      .filter((state) => state.seq > startSeq)
+    updates: updates
+      .filter((entry) => entry.seq > startSeq)
       .sort((a, b) => a.seq - b.seq)
-      .map((state) => state.line),
+      .map((entry) => entry.update),
     earlierPromptId: typeof prompt?.id === 'number' ? prompt.id : null
   }
 }
 
+/** The kept session, when everything needed to carry on without asking the agent again was kept. */
+export function restorableAcpSession(
+  kept: AcpKeptAgent,
+  sessionId: string | undefined
+): AcpSessionStarted | null {
+  return kept.initialize && kept.sessionStart
+    ? keptAcpSessionStart(kept.sessionStart, sessionId)
+    : null
+}
+
 /**
  * Starts a chat's agent under the terminal daemon, or reattaches the one it kept running, so it
- * outlives a restart. Null: relaying isn't available here, and the caller launches as today.
+ * outlives a restart. Null: relaying isn't available here, and the caller launches as today. A
+ * kept agent whose session can't be restored from what was kept is ended rather than reloaded (a
+ * reload replays history and may replace the live session), and the chat cold-starts.
  */
-export async function launchRelayedAcpAgent(
-  launch: ProviderProcessLaunch,
-  chatKey: string,
-  abandoned: () => boolean,
-  release?: () => Promise<void>
-): Promise<RelayedProviderProcess | null> {
+export async function launchRelayedAcpAgent(input: {
+  spec: Pick<AcpLaunchSpec, 'privateTempDirectory' | 'signIn'>
+  /** `resume`: the session the chat reopens; a kept agent running another one can't carry on. */
+  launch: Pick<AcpStructuredLaunch, 'resume' | 'release'>
+  process: ProviderProcessLaunch
+  chatKey: string
+  abandoned: () => boolean
+}): Promise<RelayedProviderProcess | null> {
+  // A private temp folder is the launch's own and goes at its exit; Gemini's sign-in link is read
+  // from stderr as it arrives, which a relay only sends at exit. Both launch as today.
+  if (input.spec.privateTempDirectory || input.spec.signIn) {
+    return null
+  }
+  const refuse = async (refused: unknown): Promise<never> => {
+    // Nothing of this launch ran, so its files go.
+    await input.launch.release?.().catch(() => undefined)
+    throw new AgentSessionPreSpawnError(refused)
+  }
   // Answers to this app's own requests pass a reattach's hold; everything else waits for the chat.
   let floor = Number.POSITIVE_INFINITY
-  const relayed = await launchRelayedProviderProcess(
-    launch,
-    acpRelayLaunch(chatKey, (line) => isJsonRpcAnswerAbove(line, floor))
-  ).catch(async (refused: unknown) => {
-    // A kept agent that can't be reached yet refuses the start; nothing ran, so the launch's files go.
-    await release?.().catch(() => undefined)
-    throw new AgentSessionPreSpawnError(refused)
-  })
+  const relay: ProviderRelayLaunch = {
+    chatKey: input.chatKey,
+    markers: ACP_RELAY_WORK_MARKERS,
+    keep: ACP_RELAY_KEEP,
+    passWhileHeld: (line) => isJsonRpcAnswerAbove(line, floor)
+  }
+  const relayed = await launchRelayedProviderProcess(input.process, relay).catch(refuse)
   floor = relayed?.child.attachResult?.maxClientRequestId ?? 0
+  const sessionId = input.launch.resume?.sessionId
+  if (relayed?.reattached && !restorableAcpSession(acpKeptAgent(relayed.child), sessionId)) {
+    await relayed.managed.close().catch(() => undefined)
+    return refuse(new Error('agent_kept_running_unrestorable'))
+  }
   // The chat closed meanwhile: its agent ends here, before any connection owns it.
-  if (relayed && abandoned()) {
+  if (relayed && input.abandoned()) {
     void relayed.managed.close().catch(() => undefined)
   }
   return relayed
