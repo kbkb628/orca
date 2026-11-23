@@ -216,6 +216,7 @@ function createAcpAdapter(
           : createAcpAgentConnection),
       onChildWorkEvidence: (sessionId, evidence, producer) =>
         context.host()?.publishChildWorkEvidence(sessionId, evidence, producer),
+      isBotHome: (workspaceId) => context.host()?.deps.isBotHome?.(workspaceId) === true,
       runningTurnId: async (sessionId) =>
         (await context.host()?.currentWork(sessionId))?.activeTurnId() ?? null,
       ...(deps.readProcessStartTime ? { readProcessStartTime: deps.readProcessStartTime } : {}),

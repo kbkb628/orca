@@ -15,7 +15,8 @@ import {
   type InitializeResponse
 } from '../generated/acp-protocol.generated'
 import { keptAcpSessionStart, type AcpSessionStarted } from '../protocol/acp-session-setup'
-import type { AcpLaunchSpec } from '../launch/acp-launch-contract'
+import type { AcpStructuredSessionAdapterDeps } from '../session/acp-structured-session-adapter-deps'
+import type { StructuredAgentSessionAcquireInput } from '../../native-chat/agent-session-wire/providers/structured-agent-session-adapter'
 import type { AcpStructuredLaunch } from '../launch/acp-structured-launch-resolution'
 
 const SESSION_STARTS = ['session/new', 'session/load', 'session/resume']
@@ -142,16 +143,23 @@ export function restorableAcpSession(
  * reload replays history and may replace the live session), and the chat cold-starts.
  */
 export async function launchRelayedAcpAgent(input: {
-  spec: Pick<AcpLaunchSpec, 'privateTempDirectory' | 'signIn'>
+  deps: Pick<AcpStructuredSessionAdapterDeps, 'spec' | 'isBotHome'>
+  acquire: Pick<StructuredAgentSessionAcquireInput, 'identity' | 'launch'>
   /** `resume`: the session the chat reopens; a kept agent running another one can't carry on. */
   launch: Pick<AcpStructuredLaunch, 'resume' | 'release'>
   process: ProviderProcessLaunch
-  chatKey: string
   abandoned: () => boolean
 }): Promise<RelayedProviderProcess | null> {
-  // A private temp folder is the launch's own and goes at its exit; Gemini's sign-in link is read
-  // from stderr as it arrives, which a relay only sends at exit. Both launch as today.
-  if (input.spec.privateTempDirectory || input.spec.signIn) {
+  const { spec, isBotHome } = input.deps
+  const workspaceId = input.acquire.launch?.location.workspaceId
+  // These launch as today: a private temp folder is the launch's own and goes at its exit;
+  // Gemini's sign-in link is read from stderr as it arrives, which a relay only sends at exit;
+  // a bot's tool grants live only in this app, so a kept bot would lose its tools.
+  if (
+    spec.privateTempDirectory ||
+    spec.signIn ||
+    (workspaceId !== undefined && isBotHome?.(workspaceId) === true)
+  ) {
     return null
   }
   const refuse = async (refused: unknown): Promise<never> => {
@@ -162,7 +170,7 @@ export async function launchRelayedAcpAgent(input: {
   // Answers to this app's own requests pass a reattach's hold; everything else waits for the chat.
   let floor = Number.POSITIVE_INFINITY
   const relay: ProviderRelayLaunch = {
-    chatKey: input.chatKey,
+    chatKey: input.acquire.identity.sessionId,
     markers: ACP_RELAY_WORK_MARKERS,
     keep: ACP_RELAY_KEEP,
     passWhileHeld: (line) => isJsonRpcAnswerAbove(line, floor)

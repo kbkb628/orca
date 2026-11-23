@@ -105,10 +105,10 @@ export async function acquireAcpStructuredSession(input: {
     ...acpProcessEnvironment(launch)
   }
   const relayed = await launchRelayedAcpAgent({
-    spec,
+    deps,
+    acquire,
     launch,
     process: processLaunch,
-    chatKey: sessionId,
     abandoned: input.abandoned
   })
   const connection = connect(processLaunch, {
