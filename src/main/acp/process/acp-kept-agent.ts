@@ -53,6 +53,8 @@ export type AcpKeptAgent = {
   updates: AcpKeptUpdate[]
   /** The earlier app's prompt the agent still owes an answer; null when none is listed. */
   earlierPromptId: number | null
+  /** It ended during the attach: no session is left to carry on. */
+  ended: boolean
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -122,7 +124,8 @@ export function acpKeptAgent(child: RelayedProviderChild): AcpKeptAgent {
       .filter((entry) => entry.seq > startSeq)
       .sort((a, b) => a.seq - b.seq)
       .map((entry) => entry.update),
-    earlierPromptId: typeof prompt?.id === 'number' ? prompt.id : null
+    earlierPromptId: typeof prompt?.id === 'number' ? prompt.id : null,
+    ended: child.exited !== null
   }
 }
 
@@ -131,7 +134,7 @@ export function restorableAcpSession(
   kept: AcpKeptAgent,
   sessionId: string | undefined
 ): AcpSessionStarted | null {
-  return kept.initialize && kept.sessionStart
+  return !kept.ended && kept.initialize && kept.sessionStart
     ? keptAcpSessionStart(kept.sessionStart, sessionId)
     : null
 }
@@ -142,29 +145,26 @@ export function restorableAcpSession(
  * kept agent whose session can't be restored from what was kept is ended rather than reloaded (a
  * reload replays history and may replace the live session), and the chat cold-starts.
  */
-export async function launchRelayedAcpAgent(input: {
-  deps: Pick<AcpStructuredSessionAdapterDeps, 'spec' | 'isBotHome'>
-  acquire: Pick<StructuredAgentSessionAcquireInput, 'identity' | 'launch'>
+export async function launchRelayedAcpAgent(
+  input: {
+    deps: Pick<AcpStructuredSessionAdapterDeps, 'spec'>
+    acquire: Pick<StructuredAgentSessionAcquireInput, 'identity'>
+    abandoned: () => boolean
+  },
   /** `resume`: the session the chat reopens; a kept agent running another one can't carry on. */
-  launch: Pick<AcpStructuredLaunch, 'resume' | 'release'>
-  process: ProviderProcessLaunch
-  abandoned: () => boolean
-}): Promise<RelayedProviderProcess | null> {
-  const { spec, isBotHome } = input.deps
-  const workspaceId = input.acquire.launch?.location.workspaceId
+  launch: Pick<AcpStructuredLaunch, 'resume' | 'release' | 'appBoundGrants'>,
+  processLaunch: ProviderProcessLaunch
+): Promise<RelayedProviderProcess | null> {
+  const { spec } = input.deps
   // These launch as today: a private temp folder is the launch's own and goes at its exit;
   // Gemini's sign-in link is read from stderr as it arrives, which a relay only sends at exit;
   // a bot's tool grants live only in this app, so a kept bot would lose its tools.
-  if (
-    spec.privateTempDirectory ||
-    spec.signIn ||
-    (workspaceId !== undefined && isBotHome?.(workspaceId) === true)
-  ) {
+  if (spec.privateTempDirectory || spec.signIn || launch.appBoundGrants) {
     return null
   }
   const refuse = async (refused: unknown): Promise<never> => {
     // Nothing of this launch ran, so its files go.
-    await input.launch.release?.().catch(() => undefined)
+    await launch.release?.().catch(() => undefined)
     throw new AgentSessionPreSpawnError(refused)
   }
   // Answers to this app's own requests pass a reattach's hold; everything else waits for the chat.
@@ -175,12 +175,18 @@ export async function launchRelayedAcpAgent(input: {
     keep: ACP_RELAY_KEEP,
     passWhileHeld: (line) => isJsonRpcAnswerAbove(line, floor)
   }
-  const relayed = await launchRelayedProviderProcess(input.process, relay).catch(refuse)
+  const relayed = await launchRelayedProviderProcess(processLaunch, relay).catch(refuse)
   floor = relayed?.child.attachResult?.maxClientRequestId ?? 0
-  const sessionId = input.launch.resume?.sessionId
+  const sessionId = launch.resume?.sessionId
   if (relayed?.reattached && !restorableAcpSession(acpKeptAgent(relayed.child), sessionId)) {
+    // Ended like any agent the host had to stop: the chat's turn settles and its next message
+    // starts the agent again, reopening the session (with catch-up) as today.
     await relayed.managed.close().catch(() => undefined)
     return refuse(new Error('agent_kept_running_unrestorable'))
+  }
+  // This launch's own files (a fresh config folder) go unused: the kept agent reads its first one.
+  if (relayed?.reattached) {
+    await launch.release?.().catch(() => undefined)
   }
   // The chat closed meanwhile: its agent ends here, before any connection owns it.
   if (relayed && input.abandoned()) {

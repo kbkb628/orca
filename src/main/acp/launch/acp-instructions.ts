@@ -13,7 +13,8 @@ import { placeCursorOpeningRule } from '../../cursor/cursor-opening-rule'
 import { writeFolderContextFile } from './acp-folder-context-file'
 import {
   listProviderRelaysAtLaunch,
-  liveProviderRelayChats
+  liveProviderRelayChats,
+  providerRelaysListedAtLaunch
 } from '../../provider-relay/app-provider-relays'
 import {
   openCodeSourceConfigDirectory,
@@ -218,6 +219,10 @@ const cleared = new Map<string, Promise<void>>()
  *  terminal host kept running: that agent still reads them. One host holds a profile. */
 async function clearEarlierRuns(root: string, remove: (path: string) => Promise<void>) {
   await listProviderRelaysAtLaunch()
+  // A daemon that didn't answer may still run agents reading these; they wait for a later run.
+  if (!providerRelaysListedAtLaunch()) {
+    return
+  }
   const kept = [...liveProviderRelayChats()].map(nativeChatScratchFolderName)
   const keptBy = (name: string): boolean =>
     kept.some((chat) => name === chat || name.startsWith(`${chat}.`) || name.startsWith(`${chat}-`))

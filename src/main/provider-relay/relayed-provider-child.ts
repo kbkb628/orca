@@ -109,7 +109,7 @@ export class RelayedProviderChild extends EventEmitter implements ProviderChild 
 
   /** Read once at reattach; a stream-drop reattach sends them again. */
   dropKeptLines(): void {
-    this.output.keptLines.clear()
+    this.output.dropKeptLines()
   }
 
   get handedOff(): boolean {

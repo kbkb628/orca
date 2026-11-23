@@ -22,6 +22,8 @@ export class RelayedProviderOutput {
   initializeLine: string | null = null
   /** Lines the daemon kept for this attach (session state long since acked), by seq. */
   readonly keptLines = new Map<number, string>()
+  /** Once read, a later attach's kept lines (after a dropped stream) are not held again. */
+  private keptLinesRead = false
   /** Highest data seq handed on or held; spool lines at or below it are already seen. */
   private deliveredSeq = 0
   /** Highest data seq actually handed on; the next attach and every ack start here. */
@@ -61,7 +63,9 @@ export class RelayedProviderOutput {
       return
     }
     if (event === 'relayKept') {
-      this.keptLines.set(seq, line)
+      if (!this.keptLinesRead) {
+        this.keptLines.set(seq, line)
+      }
       return
     }
     if (event === 'relayPending') {
@@ -75,6 +79,11 @@ export class RelayedProviderOutput {
       return
     }
     this.deliver(seq, this.deliveredPending.has(seq) ? null : line)
+  }
+
+  dropKeptLines(): void {
+    this.keptLinesRead = true
+    this.keptLines.clear()
   }
 
   /** `first` goes out ahead of the held lines: state the consumer rebuilt from kept lines. */

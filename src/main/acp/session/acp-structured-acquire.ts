@@ -104,13 +104,7 @@ export async function acquireAcpStructuredSession(input: {
     cwd: launch.cwd,
     ...acpProcessEnvironment(launch)
   }
-  const relayed = await launchRelayedAcpAgent({
-    deps,
-    acquire,
-    launch,
-    process: processLaunch,
-    abandoned: input.abandoned
-  })
+  const relayed = await launchRelayedAcpAgent(input, launch, processLaunch)
   const connection = connect(processLaunch, {
     ...(relayed ? { relayed } : {}),
     clientInfo: acpClientInfo(spec, launch.version ?? null),
@@ -198,7 +192,9 @@ export async function acquireAcpStructuredSession(input: {
     deps.readProcessStartTime
   )
   // Begin the attach window before replaying queued frames.
-  const makeLane = (providerSessionId: string, attaching = false): AcpStructuredLane => {
+  // A kept agent replays no history: what it sends is live, even before its chat finished opening.
+  const makeLane = (providerSessionId: string, reopening = false): AcpStructuredLane => {
+    const attaching = reopening && !connection.kept
     const lane = new AcpStructuredLane({
       sink,
       sessionId,
@@ -226,8 +222,7 @@ export async function acquireAcpStructuredSession(input: {
     slot.reattaching = attaching
     // What the agent replays is kept for catch-up, never written as it arrives.
     slot.history =
-      // A kept agent's output since the last ack is replayed in order instead of a history catch-up.
-      attaching && spec.historyCatchUp && !connection.kept
+      attaching && spec.historyCatchUp
         ? new AcpLoadHistory(providerSessionId, () =>
             logger.warn(`${agentName} chat did not catch up on turns made outside it`, {
               scope: 'acp-history-catch-up',

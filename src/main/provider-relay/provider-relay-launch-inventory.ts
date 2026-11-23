@@ -15,6 +15,8 @@ let listing: Promise<void> | null = null
 /** After a daemon didn't answer, callers use what is known until this; then one asks again. */
 let retryAt = 0
 const RETRY_AFTER_MS = 30_000
+/** Every daemon answered once: `listed` is the whole set, not part of it. */
+let complete = false
 
 /** A relay someone else is attached to belongs to another running app. */
 function keep(channel: ProviderRelayChannel, relays: readonly ProviderRelayInfo[]): void {
@@ -59,9 +61,16 @@ export function listKeptProviderRelays(clients: () => Promise<DaemonClient[]>): 
     if (answered.includes(false)) {
       listing = null
       retryAt = Date.now() + RETRY_AFTER_MS
+    } else {
+      complete = true
     }
   })()
   return listing
+}
+
+/** False while a daemon hasn't answered: an absent chat may still have a kept agent. */
+export function keptProviderRelaysComplete(): boolean {
+  return complete
 }
 
 export function keptProviderRelay(chatKey: string): KeptProviderRelay | undefined {

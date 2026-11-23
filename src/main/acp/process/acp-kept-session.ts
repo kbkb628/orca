@@ -32,12 +32,19 @@ export class AcpKeptSession {
     calls.startAbove(this.kept.requestFloor)
   }
 
-  /** The agent is initialized already; a second `initialize` is not part of the protocol. */
+  /** The agent is initialized already; a second `initialize` is not part of the protocol. Its live
+   *  session reopens here even when the agent can't reload sessions, so it says it can. */
   initialize(): Promise<InitializeResponse> {
     const { initialize } = this.kept
-    return initialize
-      ? Promise.resolve(initialize)
-      : Promise.reject(new Error('agent_kept_running_unrestorable'))
+    if (!initialize) {
+      return Promise.reject(new Error('agent_kept_running_unrestorable'))
+    }
+    const capabilities = initialize.agentCapabilities
+    return Promise.resolve(
+      capabilities?.loadSession || capabilities?.sessionCapabilities?.resume
+        ? initialize
+        : { ...initialize, agentCapabilities: { ...capabilities, loadSession: true } }
+    )
   }
 
   /** Session starts answer from the kept session, once, then its state since; never reaches the

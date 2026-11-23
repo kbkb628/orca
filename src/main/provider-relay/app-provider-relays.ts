@@ -7,6 +7,7 @@ import type {
 import {
   forgetKeptProviderRelay,
   keptProviderRelay,
+  keptProviderRelaysComplete,
   listKeptProviderRelays,
   liveKeptProviderRelayChats,
   recheckKeptProviderRelay
@@ -93,6 +94,11 @@ export function listProviderRelaysAtLaunch(): Promise<void> {
 }
 
 /** Chats whose agent is still running under the daemon; restart offers must leave these alone. */
+/** Whether the launch listing is known to be whole; nothing is kept where chats don't relay. */
+export function providerRelaysListedAtLaunch(): boolean {
+  return !route || keptProviderRelaysComplete()
+}
+
 export function liveProviderRelayChats(): ReadonlySet<string> {
   return liveKeptProviderRelayChats()
 }

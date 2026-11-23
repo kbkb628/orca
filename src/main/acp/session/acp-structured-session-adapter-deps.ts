@@ -38,8 +38,6 @@ export type AcpStructuredSessionAdapterDeps = {
   /** Protected by this host's instance lock. */
   dataDirectory: string
   connect: ConnectAcpAgent
-  /** Bot chats launch as today until a bot's tool grants outlive the app. */
-  isBotHome?: (workspaceId: string) => boolean
   /** The chat's running turn, for an agent kept running across a restart to carry on. */
   runningTurnId?: (sessionId: string) => Promise<string | null>
   readProcessStartTime?: (pid: number) => Promise<number | null>
