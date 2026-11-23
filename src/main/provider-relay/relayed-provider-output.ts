@@ -20,6 +20,8 @@ type OutputOptions = {
 export class RelayedProviderOutput {
   /** The agent's answer to the first client's `initialize`, when the relay was reattached. */
   initializeLine: string | null = null
+  /** Lines the daemon kept for this attach (session state long since acked), by seq. */
+  readonly keptLines = new Map<number, string>()
   /** Highest data seq handed on or held; spool lines at or below it are already seen. */
   private deliveredSeq = 0
   /** Highest data seq actually handed on; the next attach and every ack start here. */
@@ -45,6 +47,7 @@ export class RelayedProviderOutput {
     if (this.held) {
       this.held = []
     }
+    this.keptLines.clear()
     this.deliveredSeq = this.pushedSeq
     return this.pushedSeq
   }
@@ -55,6 +58,10 @@ export class RelayedProviderOutput {
     }
     if (event === 'relayInitialize') {
       this.initializeLine = line
+      return
+    }
+    if (event === 'relayKept') {
+      this.keptLines.set(seq, line)
       return
     }
     if (event === 'relayPending') {
@@ -70,9 +77,13 @@ export class RelayedProviderOutput {
     this.deliver(seq, this.deliveredPending.has(seq) ? null : line)
   }
 
-  release(): void {
+  /** `first` goes out ahead of the held lines: state the consumer rebuilt from kept lines. */
+  release(first: readonly string[] = []): void {
     const held = this.held
     this.held = null
+    for (const line of held ? first : []) {
+      this.push(null, line)
+    }
     for (const entry of held ?? []) {
       this.push(entry.seq, entry.line)
     }

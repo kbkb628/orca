@@ -38,6 +38,8 @@ export type AcpStructuredSessionAdapterDeps = {
   /** Protected by this host's instance lock. */
   dataDirectory: string
   connect: ConnectAcpAgent
+  /** The chat's running turn, for an agent kept running across a restart to carry on. */
+  runningTurnId?: (sessionId: string) => Promise<string | null>
   readProcessStartTime?: (pid: number) => Promise<number | null>
   onEvent?: (event: StructuredAgentSessionLifecycleEvent) => void
   /** `producer` is the reporting child's sink for durable changes. */

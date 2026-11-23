@@ -18,7 +18,13 @@ export type ProviderRelayRequest =
   | {
       id: string
       type: 'relaySpawn'
-      payload: { spec: ProviderRelaySpawnSpec; chatKey: string; policy?: ProviderRelayDetachPolicy }
+      payload: {
+        spec: ProviderRelaySpawnSpec
+        chatKey: string
+        policy?: ProviderRelayDetachPolicy
+        /** Only sent to a daemon advertising `providerRelayKeep`; older ones ignore it. */
+        keep?: ProviderRelayKeepSpec
+      }
     }
   | {
       id: string
@@ -59,6 +65,25 @@ export type ProviderRelayDetachPolicy = {
   workEnds: string[]
 }
 
+/**
+ * Agent lines kept on the relay record for the next attach, one per name, so session state the
+ * spool has long since acked (a session's start answer, its latest config update) is not lost.
+ */
+export type ProviderRelayKeepSpec = {
+  /** Client request `method`s whose latest answer is kept. */
+  answers: string[]
+  /** Substrings; the latest agent line containing each is kept. */
+  lines: string[]
+  /** Client request `method`s still awaiting an answer are listed on attach, and count as work. */
+  outstanding: string[]
+}
+
+/** A kept line's seq and the name it was kept under (`a:<method>` or `l:<marker>`). */
+export type ProviderRelayKeptLine = { seq: number; name: string }
+
+/** A client request the agent has not answered yet; its id is from the client that sent it. */
+export type ProviderRelayOutstandingRequest = { id: number | string; method: string }
+
 /** Why the daemon ended an agent itself; output stopped, so the chat says so instead of hanging. */
 export type ProviderRelayFailure =
   | 'line-too-large'
@@ -88,6 +113,9 @@ export type ProviderRelayAttachResult = {
   initializeResultSent: boolean
   stderrTail: string
   exit: ProviderRelayExit | null
+  /** Sent as `relayKept` events before this reply; absent from daemons without `providerRelayKeep`. */
+  kept?: ProviderRelayKeptLine[]
+  outstanding?: ProviderRelayOutstandingRequest[]
 }
 
 export type ProviderRelayInfo = {
@@ -107,8 +135,9 @@ export type ProviderRelayListResult = { relays: ProviderRelayInfo[] }
 /** A line longer than one frame piece arrives as consecutive pieces of one seq; `more` marks all but the last. */
 export type ProviderRelayDataEvent = {
   type: 'event'
-  /** `relayInitialize` and `relayPending` are sent on attach; `relayData` is the spool, in seq order. */
-  event: 'relayData' | 'relayPending' | 'relayInitialize'
+  /** `relayInitialize`, `relayKept` and `relayPending` are sent on attach, in that order;
+   *  `relayData` is the spool, in seq order. A kept line carries the seq it was spooled at. */
+  event: 'relayData' | 'relayPending' | 'relayInitialize' | 'relayKept'
   sessionId: string
   payload: { seq: number; line: string; more?: true }
 }

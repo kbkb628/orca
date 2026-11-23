@@ -13,6 +13,8 @@ import { acpClientInfo } from '../launch/acp-client-info'
 import * as childState from './children/acp-structured-child'
 import type { AcpSessionEvent } from '../protocol/acp-session-events'
 import type { AcpStructuredConnection } from '../process/acp-structured-connection'
+import { launchRelayedAcpAgent } from '../process/acp-kept-agent'
+import { carryOnKeptAcpAgent } from './start/acp-kept-turn'
 import { acpAgentName } from './acp-structured-agent-definitions'
 import { AcpStructuredLane } from '../journal/acp-structured-lane'
 import { acpLaneChildWorkDelivery } from '../journal/acp-lane-child-work-delivery'
@@ -96,53 +98,56 @@ export async function acquireAcpStructuredSession(input: {
   // Keep the last abort check and spawn synchronous when no temp directory is needed.
   const connect = await acpLaunchConnect(deps, launch, closedBeforeSpawn)
   let sharedTools: SharedToolProcessSession | null = null
-  const connection = connect(
-    {
-      command: launch.command,
-      args: launch.args,
-      cwd: launch.cwd,
-      ...acpProcessEnvironment(launch)
-    },
-    {
-      clientInfo: acpClientInfo(spec, launch.version ?? null),
-      // Only a chat can show a URL request's card, so other connections never advertise it.
-      clientCapabilities: withAcpUrlElicitation(spec.dialect.clientCapabilities),
-      retryBusyPrompts: spec.agent === 'omp',
-      ...(spec.signIn ? { signIn: spec.signIn } : {}),
-      onPermission: acpStructuredPermissionHandler(() => session, spec, prompts),
-      onRequest: (method, params, context) => prompts.handle(method, params, context),
-      onExtensionNotification: (method, params) =>
-        whenLane(() => {
-          if (slot.reattaching) {
-            slot.history?.keep(method, params)
-          }
-          slot.lane?.apply(
-            slot.lane.translator.notification(
-              method,
-              slot.reattaching ? asReattachHistory(params) : params,
-              now()
-            )
+  const processLaunch = {
+    command: launch.command,
+    args: launch.args,
+    cwd: launch.cwd,
+    ...acpProcessEnvironment(launch)
+  }
+  // A private temp folder is this launch's own and cleaned at its exit, so it can't outlive the app.
+  const relayed = spec.privateTempDirectory
+    ? null
+    : await launchRelayedAcpAgent(processLaunch, sessionId, input.abandoned)
+  const connection = connect(processLaunch, {
+    ...(relayed ? { relayed } : {}),
+    clientInfo: acpClientInfo(spec, launch.version ?? null),
+    // Only a chat can show a URL request's card, so other connections never advertise it.
+    clientCapabilities: withAcpUrlElicitation(spec.dialect.clientCapabilities),
+    retryBusyPrompts: spec.agent === 'omp',
+    ...(spec.signIn ? { signIn: spec.signIn } : {}),
+    onPermission: acpStructuredPermissionHandler(() => session, spec, prompts),
+    onRequest: (method, params, context) => prompts.handle(method, params, context),
+    onExtensionNotification: (method, params) =>
+      whenLane(() => {
+        if (slot.reattaching) {
+          slot.history?.keep(method, params)
+        }
+        slot.lane?.apply(
+          slot.lane.translator.notification(
+            method,
+            slot.reattaching ? asReattachHistory(params) : params,
+            now()
           )
-        }),
-      onDiagnostic: (message) =>
-        deps.logger?.warn('ACP agent protocol diagnostic', {
-          scope: 'acp-diagnostic',
-          sessionId,
-          message
-        }),
-      // Protocol loss may leave the process alive; stdout EOF alone does not trigger this.
-      onClose: (error) => {
-        session?.historyCatchUp?.abort()
-        input.onConnectionLost(session, error)
-      },
-      // Read final diagnostics at process exit, which may follow stdout EOF.
-      onExit: () => {
-        sharedTools?.end()
-        session?.historyCatchUp?.abort()
-        input.onExit(session)
-      }
+        )
+      }),
+    onDiagnostic: (message) =>
+      deps.logger?.warn('ACP agent protocol diagnostic', {
+        scope: 'acp-diagnostic',
+        sessionId,
+        message
+      }),
+    // Protocol loss may leave the process alive; stdout EOF alone does not trigger this.
+    onClose: (error) => {
+      session?.historyCatchUp?.abort()
+      input.onConnectionLost(session, error)
+    },
+    // Read final diagnostics at process exit, which may follow stdout EOF.
+    onExit: () => {
+      sharedTools?.end()
+      session?.historyCatchUp?.abort()
+      input.onExit(session)
     }
-  )
+  })
   // Until the process exits, only its session's tools can name the chat.
   sharedTools = SharedToolProcessSession.forLaunch(spec, launch.env, launch.version)
   if (!spec.permissionModeConfig) {
@@ -218,7 +223,8 @@ export async function acquireAcpStructuredSession(input: {
     slot.reattaching = attaching
     // What the agent replays is kept for catch-up, never written as it arrives.
     slot.history =
-      attaching && spec.historyCatchUp
+      // A kept agent's output since the last ack is replayed in order instead of a history catch-up.
+      attaching && spec.historyCatchUp && !connection.kept
         ? new AcpLoadHistory(providerSessionId, () =>
             logger.warn(`${agentName} chat did not catch up on turns made outside it`, {
               scope: 'acp-history-catch-up',
@@ -292,7 +298,8 @@ export async function acquireAcpStructuredSession(input: {
         onSessionLost: (error) => input.onConnectionLost(child, error)
       })
         // Before the first turn, so no tool of this session runs without its identity.
-        .then((opened) => sharedTools?.publishFor(opened) ?? opened),
+        .then((opened) => sharedTools?.publishFor(opened) ?? opened)
+        .then((opened) => carryOnKeptAcpAgent(opened, child, deps, signal)),
     dispose: () => {
       child.historyCatchUp?.abort()
       slot.lane?.dispose()

@@ -17,7 +17,8 @@ import {
   AcpConnectionClosedError
 } from '../transport/acp-errors'
 import { acpPromptRejection } from './acp-prompt-failure'
-import type { ContentBlock } from '../generated/acp-protocol.generated'
+import type { ContentBlock, PromptResponse } from '../generated/acp-protocol.generated'
+import { AcpTurnIdleWaiters } from './acp-turn-idle-waiters'
 
 type Send = { clientMessageId: string; prompt: ContentBlock[]; requestedAt: number }
 
@@ -27,7 +28,7 @@ export class AcpStructuredTurns {
   private steerCancelled: Send | null = null
   private readonly steers: Send[] = []
   private readonly unsettled = new Set<string>()
-  private readonly idleWaiters = new Set<() => void>()
+  private readonly idleWaiters = new AcpTurnIdleWaiters()
   private ended = false
   private stopAt: number | null = null
   // Steers still preparing their controls; they hold their place like queued steers.
@@ -107,15 +108,7 @@ export class AcpStructuredTurns {
     if (!this.active || signal?.aborted) {
       return Promise.resolve()
     }
-    return new Promise((resolve) => {
-      const wake = (): void => {
-        this.idleWaiters.delete(wake)
-        signal?.removeEventListener('abort', wake)
-        resolve()
-      }
-      this.idleWaiters.add(wake)
-      signal?.addEventListener('abort', wake, { once: true })
-    })
+    return this.idleWaiters.wait(signal)
   }
 
   /** A steer whose controls must run as a prompt first holds its place until released: Stop
@@ -215,6 +208,16 @@ export class AcpStructuredTurns {
     this.notifyIdle()
   }
 
+  /** The prompt an earlier app sent a kept agent: its answer ends the chat's open turn as usual. */
+  adoptEarlier(clientMessageId: string, answered: () => Promise<PromptResponse>): void {
+    if (!this.active && !this.ended) {
+      const at = this.deps.now()
+      const opened = this.deps.lane.translator.openPrompt(clientMessageId, at, undefined, true)
+      this.active = { clientMessageId, prompt: [], requestedAt: at }
+      this.run(this.active, opened.promptId, answered())
+    }
+  }
+
   private start(send: Send): void {
     const { lane } = this.deps
     // A new message is not covered by a Stop of the agent's own earlier turn.
@@ -226,13 +229,13 @@ export class AcpStructuredTurns {
     this.run(send, opened.promptId)
   }
 
-  private run(send: Send, promptId: string): void {
+  private run(send: Send, promptId: string, earlier?: Promise<PromptResponse>): void {
     const { lane } = this.deps
     // Inject identity only for dialects that echo it on turn events.
     const meta = lane.translator.injectsPromptIdentity
       ? { promptId, requestId: promptId }
       : undefined
-    const answered = this.deps.connection.prompt(send.prompt, meta)
+    const answered = earlier ?? this.deps.connection.prompt(send.prompt, meta)
     if (this.steers.length > 0 || this.preparingSteers > 0) {
       this.cancelForSteer()
     }
@@ -331,10 +334,7 @@ export class AcpStructuredTurns {
   }
 
   private notifyIdle(): void {
-    for (const wake of this.idleWaiters) {
-      wake()
-    }
-    this.idleWaiters.clear()
+    this.idleWaiters.wake()
   }
 
   private reject(clientMessageId: string, fact: SubmissionRejectionFact): void {

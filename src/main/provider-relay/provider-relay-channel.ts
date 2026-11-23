@@ -7,7 +7,8 @@ import type {
   ProviderRelayListResult,
   ProviderRelaySpawnResult,
   ProviderRelaySpawnSpec,
-  ProviderRelayDetachPolicy
+  ProviderRelayDetachPolicy,
+  ProviderRelayKeepSpec
 } from '../daemon/protocol/daemon-provider-relay-protocol'
 
 const RELAY_REQUEST_TIMEOUT_MS = 10_000
@@ -34,6 +35,7 @@ function isRelayEvent(raw: unknown): raw is ChannelEvent {
     (event.event === 'relayData' ||
       event.event === 'relayPending' ||
       event.event === 'relayInitialize' ||
+      event.event === 'relayKept' ||
       event.event === 'relayExit')
   )
 }
@@ -69,9 +71,14 @@ export class ProviderRelayChannel {
   spawn(
     spec: ProviderRelaySpawnSpec,
     chatKey: string,
-    policy: ProviderRelayDetachPolicy
+    policy: ProviderRelayDetachPolicy,
+    keep?: ProviderRelayKeepSpec
   ): Promise<ProviderRelaySpawnResult> {
-    return this.client.request('relaySpawn', { spec, chatKey, policy }, RELAY_SPAWN_TIMEOUT_MS)
+    return this.client.request(
+      'relaySpawn',
+      keep ? { spec, chatKey, policy, keep } : { spec, chatKey, policy },
+      RELAY_SPAWN_TIMEOUT_MS
+    )
   }
 
   attach(

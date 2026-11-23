@@ -102,6 +102,11 @@ export class RelayedProviderChild extends EventEmitter implements ProviderChild 
     return this.output.initializeLine
   }
 
+  /** Lines the daemon kept for this relay, by the seq they were spooled at; names are in `attachResult.kept`. */
+  get keptLines(): ReadonlyMap<number, string> {
+    return this.output.keptLines
+  }
+
   get handedOff(): boolean {
     return this.state === 'detached'
   }
@@ -130,9 +135,9 @@ export class RelayedProviderChild extends EventEmitter implements ProviderChild 
     }
   }
 
-  /** Lets held output through, in order, once the consumer can route it. */
-  releaseOutput(): void {
-    this.output.release()
+  /** Lets held output through, in order, once the consumer can route it; `first` goes ahead of it. */
+  releaseOutput(first?: readonly string[]): void {
+    this.output.release(first)
   }
 
   kill(signal?: NodeJS.Signals | number): boolean {

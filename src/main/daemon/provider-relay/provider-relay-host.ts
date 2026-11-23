@@ -101,7 +101,8 @@ export class ProviderRelayHost {
   async spawn(
     spec: ProviderRelaySpawnSpec | undefined,
     chatKey: unknown,
-    policy?: unknown
+    policy?: unknown,
+    keep?: unknown
   ): Promise<ProviderRelaySpawnResult> {
     if (!this.supported || this.disposed || !this.options.acceptsWork()) {
       return { refused: 'unavailable' }
@@ -145,6 +146,7 @@ export class ProviderRelayHost {
       onDetached: () => this.expireWhenAbandoned(relay)
     })
     relay.idleStopPolicy.configure(readProviderRelayDetachPolicy(policy))
+    relay.pending.configureKeep(keep)
     this.relays.set(relayId, relay)
     await managed.child.ready?.catch(() => {})
     // Shutdown during the launch closes this agent; the caller must not be told it runs.

@@ -82,12 +82,12 @@ export class AcpTimelineTranslator {
   openPrompt(
     clientMessageId: string,
     at: number,
-    compactionTurn?: string
+    ...open: [compactionTurn?: string, adopted?: boolean]
   ): { promptId: string; events: ProviderTimelineEvent[] } {
     if (this.loading) {
       throw new Error('ACP prompt overlaps a prompt or load')
     }
-    const prompt = this.prompts.open(clientMessageId, at, compactionTurn)
+    const prompt = this.prompts.open(clientMessageId, at, ...open)
     this.agentTurns.resume()
     if (this.prompts.current?.opened) {
       this.ownership.operation().open(prompt.promptId)

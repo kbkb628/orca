@@ -96,7 +96,7 @@ export class ProviderRelayIdleStop {
     relay: {
       readonly live: boolean
       readonly attachedClientId: string | null
-      readonly pending: { readonly size: number }
+      readonly pending: { readonly size: number; readonly working: boolean }
       close: () => Promise<unknown>
     },
     options: {
@@ -109,7 +109,8 @@ export class ProviderRelayIdleStop {
       pid: () => options.managed.child.pid,
       attached: () => relay.attachedClientId !== null,
       live: () => relay.live,
-      pendingCount: () => relay.pending.size,
+      // An unanswered request that counts as work (an ACP prompt) holds the agent like an approval.
+      pendingCount: () => relay.pending.size + (relay.pending.working ? 1 : 0),
       stop: () => void relay.close().catch(() => {}),
       log: (event, details) => options.log?.(event, { relayId: options.relayId, ...details })
     })
