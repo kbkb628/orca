@@ -51,7 +51,7 @@ export type AcpKeptAgent = {
   sessionStart: { method: string; result: unknown } | null
   /** State changes since that start, oldest first. */
   updates: AcpKeptUpdate[]
-  /** The earlier app's prompt the agent still owes an answer; null when none is listed. */
+  /** The earlier app's latest prompt the agent still owes or answers in the replay; null: none. */
   earlierPromptId: number | null
   /** It ended during the attach: no session is left to carry on. */
   ended: boolean
@@ -181,7 +181,9 @@ export async function launchRelayedAcpAgent(
   if (relayed?.reattached && !restorableAcpSession(acpKeptAgent(relayed.child), sessionId)) {
     // Ended like any agent the host had to stop: the chat's turn settles and its next message
     // starts the agent again, reopening the session (with catch-up) as today.
-    await relayed.managed.close().catch(() => undefined)
+    if (relayed.child.exited === null) {
+      await relayed.managed.close().catch(() => undefined)
+    }
     return refuse(new Error('agent_kept_running_unrestorable'))
   }
   // This launch's own files (a fresh config folder) go unused: the kept agent reads its first one.

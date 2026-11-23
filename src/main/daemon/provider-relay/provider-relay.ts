@@ -182,16 +182,17 @@ export class ProviderRelay {
     if (this.exitAnnounced) {
       this.sendExit()
     }
-    return this.attachResult(replayThroughSeq, pending, initializeResult !== null)
+    return this.attachResult(cursor, replayThroughSeq, pending, initializeResult !== null)
   }
 
   private attachResult(
+    cursor: number,
     replayThroughSeq: number,
     pending: ProviderRelayRecord[],
     initializeResultSent: boolean
   ): ProviderRelayAttachResult {
     return {
-      ...this.pending.attachDetails(),
+      ...this.pending.attachDetails(Math.max(cursor, this.spool.ackedSeq)),
       replayThroughSeq,
       pending: pending.map((record) => record.seq),
       maxClientRequestId: this.pending.maxClientRequestId,
@@ -307,11 +308,7 @@ export class ProviderRelay {
     if (paused !== this.readingPaused) {
       this.readingPaused = paused
       const { stdout } = this.options.managed.child
-      if (paused) {
-        stdout.pause()
-      } else {
-        stdout.resume()
-      }
+      void (paused ? stdout.pause() : stdout.resume())
     }
   }
 

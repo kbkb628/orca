@@ -1,7 +1,4 @@
 import type { AcpPendingResponse, AcpRequestOptions, AcpResponse } from './acp-response-settlement'
-import type { AcpJsonRpcMessage } from './acp-rpc-envelope'
-
-type EarlierCall = AcpPendingResponse & { matches: (frame: AcpJsonRpcMessage) => boolean }
 
 /**
  * A peer's outstanding calls by id. An agent kept running across an app restart already saw the
@@ -10,10 +7,6 @@ type EarlierCall = AcpPendingResponse & { matches: (frame: AcpJsonRpcMessage) =>
 export class AcpPendingCalls {
   readonly pending = new Map<number, AcpPendingResponse>()
   private next = 1
-  /** Ids at or below this were sent by the app that ran this agent before a restart. */
-  private earlierThrough = 0
-  /** An earlier call whose id is unknown; the first earlier answer `matches` accepts settles it. */
-  private earlier?: EarlierCall
 
   constructor(private readonly closedWith: () => Error | undefined) {}
 
@@ -22,17 +15,11 @@ export class AcpPendingCalls {
   }
 
   startAbove(floor: number): void {
-    this.earlierThrough = Math.max(this.earlierThrough, floor)
     this.next = Math.max(this.next, floor + 1)
   }
 
-  /** Waits for an earlier app's call; a null id takes the first earlier answer `matches` accepts. */
-  adoptEarlier<T>(
-    id: number | null,
-    method: string,
-    settle: AcpRequestOptions<T>['settle'],
-    matches: (frame: AcpJsonRpcMessage) => boolean
-  ): Promise<T> {
+  /** Waits for the answer to an earlier app's call by its id. */
+  adoptEarlier<T>(id: number, method: string, settle: AcpRequestOptions<T>['settle']): Promise<T> {
     const closed = this.closedWith()
     if (closed) {
       return Promise.reject(closed)
@@ -50,27 +37,8 @@ export class AcpPendingCalls {
         resolve: (value: unknown) => answer({ value }),
         reject: (error: Error) => answer({ error })
       }
-      if (id === null) {
-        this.earlier = { ...call, matches }
-      } else {
-        this.pending.set(id, call)
-      }
+      this.pending.set(id, call)
     })
-  }
-
-  /** Before an answer is settled: an earlier answer nobody waits on by id may be the adopted call. */
-  claim(frame: AcpJsonRpcMessage): void {
-    const { earlier } = this
-    if (
-      earlier &&
-      typeof frame.id === 'number' &&
-      frame.id <= this.earlierThrough &&
-      !this.pending.has(frame.id) &&
-      earlier.matches(frame)
-    ) {
-      this.earlier = undefined
-      this.pending.set(frame.id, earlier)
-    }
   }
 
   rejectAll(error: Error): void {
@@ -79,7 +47,5 @@ export class AcpPendingCalls {
       pending.reject(error)
     }
     this.pending.clear()
-    this.earlier?.reject(error)
-    this.earlier = undefined
   }
 }

@@ -88,16 +88,17 @@ export class AcpKeptSession {
     }
   }
 
-  /** The answer to the earlier app's prompt: by id while unanswered, else its answer in the replay. */
+  /** The answer to the earlier app's prompt, by its id; none listed means it never reached the
+   *  agent (the earlier app quit before writing it), so its turn fails instead of hanging. */
   earlierPrompt(): Promise<PromptResponse> {
-    return this.calls.adoptEarlier(
-      this.kept.earlierPromptId,
-      'session/prompt',
-      settleAcpSessionCall('session/prompt', PromptResponseSchema, undefined),
-      (frame) =>
-        'error' in frame ||
-        (typeof frame.result === 'object' && frame.result !== null && 'stopReason' in frame.result)
-    )
+    const id = this.kept.earlierPromptId
+    return id === null
+      ? Promise.reject(new Error('The message did not reach the agent before Orca restarted'))
+      : this.calls.adoptEarlier(
+          id,
+          'session/prompt',
+          settleAcpSessionCall('session/prompt', PromptResponseSchema, undefined)
+        )
   }
 
   /** Lets the held output through once the chat can route it. */

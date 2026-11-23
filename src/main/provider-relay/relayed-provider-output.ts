@@ -62,8 +62,10 @@ export class RelayedProviderOutput {
       this.initializeLine = line
       return
     }
+    // Only an attach whose output is held for its consumer reads kept lines: a fresh spawn's
+    // re-sent ones after a dropped stream are never read, so never held.
     if (event === 'relayKept') {
-      if (!this.keptLinesRead) {
+      if (!this.keptLinesRead && this.held) {
         this.keptLines.set(seq, line)
       }
       return

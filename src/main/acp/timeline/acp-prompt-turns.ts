@@ -51,8 +51,8 @@ export class AcpPromptTurns {
     return ending
   }
 
-  /** Reuse the host's already-open command turn for compaction. */
-  /** `adopted`: an earlier app's prompt a kept agent still runs; the chat shows its turn already. */
+  /** `compactionTurn`: reuse the host's already-open command turn for compaction. `adopted`: an
+   *  earlier app's prompt a kept agent still runs; the chat shows its turn already. */
   open(
     clientMessageId: string,
     at: number,

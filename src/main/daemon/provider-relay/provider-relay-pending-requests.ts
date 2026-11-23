@@ -76,6 +76,8 @@ export class ProviderRelayPendingRequests {
   private keep: ProviderRelayKeepSpec | null = null
   /** Client requests named by the keep spec, by key, until answered. */
   private readonly awaited = new Map<string, AwaitedRequest>()
+  /** Per outstanding-tracked method, the latest one answered and the seq of its answer. */
+  private readonly answered = new Map<string, ProviderRelayOutstandingRequest & { seq: number }>()
   /** `a:<method>` or `l:<marker>` → the latest line for it. */
   private readonly kept = new Map<string, ProviderRelayRecord>()
   private keptChars = 0
@@ -95,6 +97,7 @@ export class ProviderRelayPendingRequests {
     this.kept.clear()
     this.keptChars = 0
     this.awaited.clear()
+    this.answered.clear()
   }
 
   /** What `relaySpawn` asked to keep for later attaches. */
@@ -107,15 +110,21 @@ export class ProviderRelayPendingRequests {
     return [...this.kept.values()].sort((a, b) => a.seq - b.seq)
   }
 
-  /** Which kept seq answers to which name, and requests the agent still owes; empty ones are left out. */
-  attachDetails(): {
+  /** Which kept seq answers to which name, and requests the agent still owes or answered after
+   *  `afterSeq` (so the answer is in this replay), oldest first; empty ones are left out. */
+  attachDetails(afterSeq: number): {
     kept?: ProviderRelayKeptLine[]
     outstanding?: ProviderRelayOutstandingRequest[]
   } {
     const kept = [...this.kept].map(([name, record]) => ({ seq: record.seq, name }))
-    const outstanding = [...this.awaited.values()]
-      .filter((request) => request.outstanding)
-      .map(({ id, method }) => ({ id, method }))
+    const outstanding = [
+      ...[...this.answered.values()]
+        .filter((request) => request.seq > afterSeq)
+        .map(({ id, method }) => ({ id, method, answered: true as const })),
+      ...[...this.awaited.values()]
+        .filter((request) => request.outstanding)
+        .map(({ id, method }) => ({ id, method }))
+    ]
     return {
       ...(kept.length > 0 ? { kept } : {}),
       ...(outstanding.length > 0 ? { outstanding } : {})
@@ -182,17 +191,16 @@ export class ProviderRelayPendingRequests {
         }
       }
     }
+    const hasId = line.includes('"id"')
     const maybeRpcRequest =
       line.includes('"method"') &&
-      (line.includes('"id"') ||
-        line.includes(RESOLVED_METHOD) ||
-        line.includes(RESOLVED_METHOD_ESCAPED))
+      (hasId || line.includes(RESOLVED_METHOD) || line.includes(RESOLVED_METHOD_ESCAPED))
     const maybeControl = line.includes('control_')
     // Until the initialize answer is seen, any line shaped like an answer is parsed for it.
     const awaitingInitialize = this.initializeKey !== null && this.initializeResult === null
     // Every answer names its id; tool output quoting "result" mid-turn is not parsed for it.
     const maybeAnswer =
-      (awaitingInitialize || (this.awaited.size > 0 && line.includes('"id"'))) &&
+      (awaitingInitialize || (this.awaited.size > 0 && hasId)) &&
       (line.includes('"result"') || line.includes('"error"'))
     if (!maybeRpcRequest && !maybeControl && !maybeAnswer && !mayHideKey(line)) {
       return
@@ -236,6 +244,13 @@ export class ProviderRelayPendingRequests {
     const awaited = answerKey === null ? undefined : this.awaited.get(answerKey)
     if (answerKey !== null && awaited !== undefined) {
       this.awaited.delete(answerKey)
+      if (awaited.outstanding) {
+        this.answered.set(awaited.method, {
+          id: awaited.id,
+          method: awaited.method,
+          seq: record.seq
+        })
+      }
       // Only a success is state worth restoring; a refused request leaves the last one standing.
       if (awaited.keep && 'result' in message) {
         this.keepLine(`a:${awaited.method}`, record)

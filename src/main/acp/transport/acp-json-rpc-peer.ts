@@ -307,7 +307,6 @@ export class AcpJsonRpcPeer {
       }
       return
     }
-    this.calls.claim(frame)
     settleAcpReply({
       record,
       frame,

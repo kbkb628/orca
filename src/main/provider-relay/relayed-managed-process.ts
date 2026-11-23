@@ -48,6 +48,10 @@ export function relayedManagedProcess(child: RelayedProviderChild): ManagedProvi
     listeners.clear()
   }
   child.once('exit', observe)
+  // An exit emitted before this was built (during the attach) is not emitted again.
+  if (child.exited) {
+    observe()
+  }
 
   const stderrTail = (): string => {
     const exit = child.exited

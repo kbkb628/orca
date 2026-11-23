@@ -23,6 +23,8 @@ export type AcpTextDrop = {
 
 export class AcpTurnMessages {
   private readonly turns = new Map<string, MessagePosition>()
+  /** Turns an earlier app began: its saved messages hold the first ordinals, so these never reuse them. */
+  private readonly carried = new Set<string>()
 
   constructor(private readonly owners: AcpItemOwnership) {}
 
@@ -115,14 +117,23 @@ export class AcpTurnMessages {
       state.ordinal += 1
       state.channel = update.sessionUpdate
     }
-    return `turn-message:${JSON.stringify([turn, state.ordinal])}`
+    const position = this.carried.has(turn)
+      ? [turn, state.ordinal, 'carried']
+      : [turn, state.ordinal]
+    return `turn-message:${JSON.stringify(position)}`
+  }
+
+  carry(turn: string): void {
+    this.carried.add(turn)
   }
 
   dispose(): void {
     this.turns.clear()
+    this.carried.clear()
   }
 
   end(turn: string): void {
     this.turns.delete(turn)
+    this.carried.delete(turn)
   }
 }

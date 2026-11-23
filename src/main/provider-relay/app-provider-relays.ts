@@ -93,12 +93,12 @@ export function listProviderRelaysAtLaunch(): Promise<void> {
   return installed ? listKeptProviderRelays(() => installed.all()) : Promise.resolve()
 }
 
-/** Chats whose agent is still running under the daemon; restart offers must leave these alone. */
 /** Whether the launch listing is known to be whole; nothing is kept where chats don't relay. */
 export function providerRelaysListedAtLaunch(): boolean {
   return !route || keptProviderRelaysComplete()
 }
 
+/** Chats whose agent is still running under the daemon; restart offers must leave these alone. */
 export function liveProviderRelayChats(): ReadonlySet<string> {
   return liveKeptProviderRelayChats()
 }

@@ -256,7 +256,7 @@ describe('provider relay kept lines', () => {
     client(pending, { id: 3, method: 'session/prompt', params: {} })
 
     expect(pending.keptRecords().map((record) => record.seq)).toEqual([1, 3])
-    expect(pending.attachDetails()).toEqual({
+    expect(pending.attachDetails(0)).toEqual({
       kept: [
         { seq: 1, name: 'a:session/new' },
         { seq: 3, name: 'l:"config_option_update"' }
@@ -269,7 +269,11 @@ describe('provider relay kept lines', () => {
 
     agent(pending, 5, { id: 3, result: { stopReason: 'end_turn' } })
     expect(pending.working).toBe(false)
-    expect(pending.attachDetails().outstanding).toBeUndefined()
+    // Answered within the replay after seq 4, so the next app can wait on it by id.
+    expect(pending.attachDetails(4).outstanding).toEqual([
+      { id: 3, method: 'session/prompt', answered: true }
+    ])
+    expect(pending.attachDetails(5).outstanding).toBeUndefined()
     expect(pending.keptRecords().map((record) => record.seq)).toEqual([1, 3])
   })
 

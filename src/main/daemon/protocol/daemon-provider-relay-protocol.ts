@@ -81,8 +81,13 @@ export type ProviderRelayKeepSpec = {
 /** A kept line's seq and the name it was kept under (`a:<method>` or `l:<marker>`). */
 export type ProviderRelayKeptLine = { seq: number; name: string }
 
-/** A client request the agent has not answered yet; its id is from the client that sent it. */
-export type ProviderRelayOutstandingRequest = { id: number | string; method: string }
+/** A client request the agent has not answered yet, or `answered` in the replay that follows;
+ *  its id is from the client that sent it. */
+export type ProviderRelayOutstandingRequest = {
+  id: number | string
+  method: string
+  answered?: true
+}
 
 /** Why the daemon ended an agent itself; output stopped, so the chat says so instead of hanging. */
 export type ProviderRelayFailure =

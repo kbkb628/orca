@@ -105,10 +105,7 @@ export class AcpStructuredTurns {
   }
 
   whenIdle(signal?: AbortSignal): Promise<void> {
-    if (!this.active || signal?.aborted) {
-      return Promise.resolve()
-    }
-    return this.idleWaiters.wait(signal)
+    return !this.active || signal?.aborted ? Promise.resolve() : this.idleWaiters.wait(signal)
   }
 
   /** A steer whose controls must run as a prompt first holds its place until released: Stop
@@ -208,11 +205,17 @@ export class AcpStructuredTurns {
     this.notifyIdle()
   }
 
-  /** The prompt an earlier app sent a kept agent: its answer ends the chat's open turn as usual. */
-  adoptEarlier(clientMessageId: string, answered: () => Promise<PromptResponse>): void {
+  /** The prompt an earlier app sent a kept agent: its answer ends the chat's open turn as usual.
+   *  `compactionTurn`: the prompt was the host's `/compact`, whose begun command turn it settles. */
+  adoptEarlier(
+    clientMessageId: string,
+    answered: () => Promise<PromptResponse>,
+    compactionTurn?: string
+  ): void {
     if (!this.active && !this.ended) {
       const at = this.deps.now()
-      const opened = this.deps.lane.translator.openPrompt(clientMessageId, at, undefined, true)
+      const { translator } = this.deps.lane
+      const opened = translator.openPrompt(clientMessageId, at, compactionTurn, !compactionTurn)
       this.active = { clientMessageId, prompt: [], requestedAt: at }
       this.run(this.active, opened.promptId, answered())
     }
