@@ -104,7 +104,14 @@ function snapshotFromState(
         }
       : state.tabsByWorktree,
     terminalLayoutsByTabId: state.terminalLayoutsByTabId,
-    ptyIdsByTabId: state.ptyIdsByTabId,
+    // A one-pane plan sees its tab's live processes as just its own, so no tab-wide set is built.
+    ptyIdsByTabId: pane
+      ? {
+          [pane.tabId]: panePtyIds(state, pane).filter((id) =>
+            tabBindingSet(state, pane.tabId).has(id)
+          )
+        }
+      : state.ptyIdsByTabId,
     runtimeLivePtyIdsByWorktreeId: hostEvidence.runtimeLivePtyIdsByWorktreeId,
     // Union fresh owners with pre-await targets so newly resolved workspaces fail closed without host evidence; never narrow that set.
     runtimeLivenessRequiredWorktreeIds: [
@@ -135,6 +142,20 @@ function snapshotFromState(
     boundaryResolvedAtByPaneKey: getHibernationBoundaryResolvedAtByPaneKey(pane?.paneKey),
     now
   }
+}
+
+const bindingSets = new WeakMap<readonly string[], ReadonlySet<string>>()
+const NO_BINDINGS: readonly string[] = []
+
+/** A tab's bound processes as a set, built once per binding list, so each one-pane check is a lookup. */
+function tabBindingSet(state: AppState, tabId: string): ReadonlySet<string> {
+  const bound = state.ptyIdsByTabId[tabId] ?? NO_BINDINGS
+  let set = bindingSets.get(bound)
+  if (!set) {
+    set = new Set(bound)
+    bindingSets.set(bound, set)
+  }
+  return set
 }
 
 /** The target pane's own process, under its window and runtime ids: siblings in its split are not read. */
