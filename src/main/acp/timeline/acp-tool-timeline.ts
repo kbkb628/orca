@@ -106,12 +106,13 @@ export class AcpToolTimeline {
 
   /** A running call the earlier app saved: this run's updates to it revise what was saved. */
   carry(saved: AgentJournalToolCallItem, turn: string | undefined): void {
-    if (saved.state !== 'running' || this.tools.has(saved.callId)) {
+    const { callId } = saved
+    if (callId === undefined || saved.state !== 'running' || this.tools.has(callId)) {
       return
     }
-    this.tools.set(saved.callId, { body: saved, ...(turn === undefined ? {} : { turn }) })
+    this.tools.set(callId, { body: saved, ...(turn === undefined ? {} : { turn }) })
     if (turn !== undefined) {
-      this.owners.remember(`tool:${saved.callId}`, turn)
+      this.owners.remember(`tool:${callId}`, turn)
     }
   }
 
